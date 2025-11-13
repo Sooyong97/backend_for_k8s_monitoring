@@ -1,0 +1,43 @@
+# Gradle
+.gradle/
+gradle/
+build/
+gradlew*
+build.gradle
+
+# 빌드 산출물
+*.jar
+*.war
+out/
+
+# IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Thumbs.db (Windows 탐색기 캐시)
+Thumbs.db
+ehthumbs.db
+ehthumbs_vista.db
+
+# 운영체제 임시 파일
+*.swp
+*.swo
+*~
+
+# 로그
+logs/
+*.log
+
+# 로컬 환경 변수 파일
+.env
+
+application.properties
+
+#Spring Boot DevTools 로컬 설정
+.spring-boot-devtools.properties

@@ -1,13 +1,12 @@
-# Gradle
-.gradle/
-gradle/
-build/
-gradlew*
-build.gradle
-
-# 빌드 산출물
+# Java
+*.class
 *.jar
 *.war
+*.ear
+
+# Gradle
+.gradle/
+build/
 out/
 
 # IntelliJ IDEA
@@ -15,29 +14,30 @@ out/
 *.iml
 *.iws
 
-# macOS
+# VS Code
+.vscode/
+
+# OS / 시스템 파일
 .DS_Store
 .AppleDouble
 .LSOverride
 
-# Thumbs.db (Windows 탐색기 캐시)
+# Windows Explorer thumbnail cache files
 Thumbs.db
 ehthumbs.db
 ehthumbs_vista.db
 
-# 운영체제 임시 파일
+# vi/vim swap files
 *.swp
 *.swo
 *~
 
-# 로그
+# Logs
 logs/
 *.log
 
-# 로컬 환경 변수 파일
+# Environment variables
 .env
 
-application.properties
-
-#Spring Boot DevTools 로컬 설정
+# Spring Boot DevTools
 .spring-boot-devtools.properties

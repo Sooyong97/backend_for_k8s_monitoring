@@ -1,0 +1,71 @@
+plugins {
+    id 'java'
+    id 'org.springframework.boot' version '3.5.7'
+    id 'io.spring.dependency-management' version '1.1.5'
+}
+
+// Java 21
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+group = 'com.fts_back'
+version = '0.0.1-SNAPSHOT'
+
+configurations {
+    compileOnly {
+        extendsFrom annotationProcessor
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // Spring Web: REST API 및 내장 Tomcat 서버
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+
+    // WebClient: AI 에이전트 등 외부 API를 비동기/논블로킹으로 호출하기 위함
+    implementation 'org.springframework.boot:spring-boot-starter-webflux'
+
+    // WebSocket, STOMP
+    implementation 'org.springframework.boot:spring-boot-starter-websocket'
+
+    // Lombok
+    compileOnly 'org.projectlombok:lombok'
+    annotationProcessor 'org.projectlombok:lombok'
+
+    // Spring Boot DevTools: 편의 기능 추가
+    developmentOnly 'org.springframework.boot:spring-boot-devtools'
+
+    // Configuration Processor: application.properties/yml 편의 기능 추가
+    annotationProcessor 'org.springframework.boot:spring-boot-configuration-processor'
+
+    // 테스트
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+
+    // WebClient (WebFlux) 테스트 지원
+    testImplementation 'io.projectreactor:reactor-test'
+
+    // 테스트에서 Lombok 사용
+    testCompileOnly 'org.projectlombok:lombok'
+    testAnnotationProcessor 'org.projectlombok:lombok'
+}
+
+// 테스트 설정
+tasks.named('test') {
+    useJUnitPlatform() // JUnit 5 사용
+}
+
+// 빌드 및 컴파일 관련 추가 설정
+tasks.withType(JavaCompile) {
+    options.encoding = 'UTF-8' // Java 소스 파일 인코딩 UTF-8로 설정
+}
+
+// 'bootBuildImage' 태스크 (Docker 이미지 빌드) 설정
+tasks.named('bootBuildImage') {
+    builder = 'paketobuildpacks/builder-jammy-base:latest'
+}

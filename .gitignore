@@ -5,7 +5,7 @@
 *.ear
 
 # Gradle
-.gradle/
+#.gradle/
 build/
 out/
 

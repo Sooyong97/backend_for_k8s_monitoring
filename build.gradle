@@ -44,6 +44,11 @@ dependencies {
     // Configuration Processor: application.properties/yml 편의 기능 추가
     annotationProcessor 'org.springframework.boot:spring-boot-configuration-processor'
 
+    // Redis 사용을 위한 스타터
+    implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+
+    implementation 'org.apache.commons:commons-pool2'
+
     // 테스트
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
 

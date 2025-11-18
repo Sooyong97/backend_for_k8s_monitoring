@@ -72,13 +72,28 @@ public class AlertController {
         chatSessionService.addMessageToHistory(roomId, "user", userMessage.getContent());
 
         // 3. AI Agent의 /chat 엔드포인트 호출 (비동기)
+        log.info("Room[{}]: AI Agent 호출 시작. InitialContext 길이: {}, History 크기: {}, UserMessage: {}", 
+                roomId, 
+                session.getInitialContext() != null ? session.getInitialContext().length() : 0,
+                session.getHistory() != null ? session.getHistory().size() : 0,
+                userMessage.getContent());
+        
         aiAgentClient.getChatResponse(
                 session.getInitialContext(),
                 session.getHistory(),
                 userMessage.getContent()
         ).subscribe(aiAnswer -> {
             // 4. AI의 답변을 대화 내역에 추가
-            log.info("Room[{}]: AI 답변 수신: {}", roomId, aiAnswer.substring(0, 30));
+            if (aiAnswer == null || aiAnswer.trim().isEmpty()) {
+                log.warn("Room[{}]: AI 답변이 비어있습니다.", roomId);
+                aiAnswer = "AI 응답이 비어있습니다. 다시 시도해주세요.";
+            } else {
+                log.info("Room[{}]: AI 답변 수신 성공. 길이: {}, 미리보기: {}", 
+                        roomId, 
+                        aiAnswer.length(),
+                        aiAnswer.length() > 50 ? aiAnswer.substring(0, 50) + "..." : aiAnswer);
+            }
+            
             chatSessionService.addMessageToHistory(roomId, "ai", aiAnswer);
 
             // 5. AI의 답변을 해당 방('/topic/room/{roomId}')을 구독 중인 사용자에게 전송
@@ -86,10 +101,96 @@ public class AlertController {
             messagingTemplate.convertAndSend("/topic/room/" + roomId, aiMessage);
 
         }, error -> {
-            // 에러 처리
-            log.error("Room[{}]: AI Agent 호출 실패: {}", roomId, error.getMessage());
-            AiMessage errorMessage = new AiMessage("AI 응답 생성 중 오류가 발생했습니다.", "ai");
-            messagingTemplate.convertAndSend("/topic/room/" + roomId, errorMessage);
+            // 에러 처리 - 에러 타입별로 상세한 로깅 및 메시지 전송
+            String errorMessage;
+            String logMessage;
+            
+            // 근본 원인(cause) 확인
+            Throwable rootCause = error;
+            while (rootCause.getCause() != null && rootCause.getCause() != rootCause) {
+                rootCause = rootCause.getCause();
+            }
+            
+            if (error instanceof org.springframework.web.reactive.function.client.WebClientResponseException) {
+                // HTTP 응답이 있지만 에러 상태 코드인 경우
+                org.springframework.web.reactive.function.client.WebClientResponseException webClientError = 
+                        (org.springframework.web.reactive.function.client.WebClientResponseException) error;
+                org.springframework.http.HttpStatusCode status = webClientError.getStatusCode();
+                String responseBody = webClientError.getResponseBodyAsString();
+                int statusValue = status.value();
+                
+                if (statusValue >= 400 && statusValue < 500) {
+                    logMessage = String.format("Room[%s]: AI Agent 클라이언트 에러 (4xx). Status: %s, Response: %s", 
+                            roomId, status, responseBody);
+                    errorMessage = String.format("AI 서버에서 요청 오류가 발생했습니다. (상태 코드: %s)", statusValue);
+                } else if (statusValue >= 500) {
+                    logMessage = String.format("Room[%s]: AI Agent 서버 에러 (5xx). Status: %s, Response: %s", 
+                            roomId, status, responseBody);
+                    errorMessage = "AI 서버에서 내부 오류가 발생했습니다. 잠시 후 다시 시도해주세요.";
+                } else {
+                    logMessage = String.format("Room[%s]: AI Agent HTTP 에러. Status: %s, Response: %s", 
+                            roomId, status, responseBody);
+                    errorMessage = String.format("AI 서버 통신 중 오류가 발생했습니다. (상태 코드: %s)", statusValue);
+                }
+                
+                log.error(logMessage, webClientError);
+                
+            } else if (error instanceof org.springframework.web.reactive.function.client.WebClientRequestException) {
+                // 네트워크 레벨 에러 (연결 실패, 라우팅 실패 등)
+                org.springframework.web.reactive.function.client.WebClientRequestException requestException = 
+                        (org.springframework.web.reactive.function.client.WebClientRequestException) error;
+                
+                if (rootCause instanceof java.net.NoRouteToHostException) {
+                    logMessage = String.format("Room[%s]: AI Agent 서버로 라우팅 실패 (NoRouteToHostException) - 네트워크 경로를 확인하세요", roomId);
+                    errorMessage = "AI 서버로의 네트워크 경로를 찾을 수 없습니다. 네트워크 설정과 방화벽을 확인해주세요.";
+                } else if (rootCause instanceof java.net.ConnectException) {
+                    logMessage = String.format("Room[%s]: AI Agent 서버 연결 실패 (ConnectException) - 서버가 실행 중인지 확인하세요", roomId);
+                    errorMessage = "AI 서버에 연결할 수 없습니다. 서버가 실행 중인지 확인해주세요.";
+                } else if (rootCause instanceof java.net.SocketTimeoutException || 
+                           rootCause instanceof java.util.concurrent.TimeoutException) {
+                    logMessage = String.format("Room[%s]: AI Agent 서버 연결 타임아웃", roomId);
+                    errorMessage = "AI 서버 연결 시간이 초과되었습니다. 네트워크 상태를 확인해주세요.";
+                } else {
+                    logMessage = String.format("Room[%s]: AI Agent 네트워크 요청 실패. Root cause: %s", 
+                            roomId, rootCause.getClass().getSimpleName());
+                    errorMessage = "AI 서버와의 네트워크 통신에 실패했습니다. 서버 상태와 네트워크 연결을 확인해주세요.";
+                }
+                
+                log.error(logMessage + ". Request URL: " + requestException.getMessage(), requestException);
+                
+            } else if (error instanceof java.util.concurrent.TimeoutException) {
+                logMessage = String.format("Room[%s]: AI Agent 호출 타임아웃 (60초 초과)", roomId);
+                errorMessage = "AI 응답 시간이 초과되었습니다. AI 서버가 과부하 상태일 수 있습니다. 잠시 후 다시 시도해주세요.";
+                log.error(logMessage, error);
+                
+            } else if (rootCause instanceof java.net.NoRouteToHostException) {
+                logMessage = String.format("Room[%s]: AI Agent 서버로 라우팅 실패 (NoRouteToHostException) - 네트워크 경로를 확인하세요", roomId);
+                errorMessage = "AI 서버로의 네트워크 경로를 찾을 수 없습니다. 네트워크 설정과 방화벽을 확인해주세요.";
+                log.error(logMessage, error);
+                
+            } else if (rootCause instanceof java.net.ConnectException) {
+                logMessage = String.format("Room[%s]: AI Agent 서버 연결 실패 (ConnectException) - 서버가 실행 중인지 확인하세요", roomId);
+                errorMessage = "AI 서버에 연결할 수 없습니다. 서버가 실행 중인지 확인해주세요.";
+                log.error(logMessage, error);
+                
+            } else if (error.getMessage() != null && (
+                       error.getMessage().contains("Connection refused") ||
+                       error.getMessage().contains("Connection timed out") ||
+                       error.getMessage().contains("No route to host"))) {
+                logMessage = String.format("Room[%s]: AI Agent 서버 연결 실패 - 서버가 실행 중인지 확인하세요", roomId);
+                errorMessage = "AI 서버에 연결할 수 없습니다. 서버 상태를 확인해주세요.";
+                log.error(logMessage, error);
+                
+            } else {
+                logMessage = String.format("Room[%s]: AI Agent 호출 중 예기치 않은 에러 발생. Error type: %s, Root cause: %s", 
+                        roomId, error.getClass().getName(), rootCause.getClass().getName());
+                errorMessage = "AI 응답 생성 중 예기치 않은 오류가 발생했습니다.";
+                log.error(logMessage + ". Message: " + error.getMessage(), error);
+            }
+            
+            // 에러 메시지를 프론트엔드에 전송
+            AiMessage errorMsg = new AiMessage(errorMessage, "ai");
+            messagingTemplate.convertAndSend("/topic/room/" + roomId, errorMsg);
         });
     }
 }

@@ -16,7 +16,7 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
         // (예: ws://localhost:8080/ws)
         registry.addEndpoint("/ws")
                 // 모든 도메인에서의 접속을 허용 (CORS)
-                .setAllowedOriginPatterns("*");
+                .setAllowedOriginPatterns("*").withSockJS();
     }
 
     @Override

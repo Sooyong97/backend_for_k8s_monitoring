@@ -1,0 +1,107 @@
+package com.k8s.agent.backend.client;
+
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import lombok.Data;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.MediaType;
+import org.springframework.stereotype.Component;
+import org.springframework.web.reactive.function.client.WebClient;
+import reactor.core.publisher.Mono;
+
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Loki API 클라이언트
+ * LogQL 쿼리를 실행하고 JSON으로 변환하여 반환
+ */
+@Component
+public class LokiClient {
+
+    private static final Logger log = LoggerFactory.getLogger(LokiClient.class);
+    private final WebClient webClient;
+    private final String baseUrl;
+
+    public LokiClient(WebClient.Builder builder, @Value("${loki.base-url}") String baseUrl) {
+        this.baseUrl = baseUrl;
+        this.webClient = builder
+                .baseUrl(baseUrl)
+                .build();
+        log.info("LokiClient 초기화 완료. Base URL: {}", baseUrl);
+    }
+
+    @Data
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class LokiResponse {
+        private String status;
+        private LokiData data;
+
+        @Data
+        @JsonIgnoreProperties(ignoreUnknown = true)
+        public static class LokiData {
+            private String resultType;
+            private List<LokiResult> result;
+
+            @Data
+            @JsonIgnoreProperties(ignoreUnknown = true)
+            public static class LokiResult {
+                private Map<String, String> stream;
+                private List<List<String>> values; // [[timestamp, log_line], ...]
+            }
+        }
+    }
+
+    /**
+     * Instant Query 실행
+     */
+    public Mono<LokiResponse> query(String logql) {
+        log.debug("Loki instant query: {}", logql);
+        try {
+            // LogQL을 URL 인코딩하여 직접 URI 구성 (중괄호가 URI 템플릿 변수로 해석되는 것을 방지)
+            String encodedQuery = java.net.URLEncoder.encode(logql, StandardCharsets.UTF_8)
+                    .replace("+", "%20"); // +를 %20으로 변환
+            URI uri = URI.create(baseUrl + "/loki/api/v1/query?query=" + encodedQuery);
+            return webClient.get()
+                    .uri(uri)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .retrieve()
+                    .bodyToMono(LokiResponse.class)
+                    .timeout(Duration.ofSeconds(10))
+                    .doOnError(error -> log.error("Loki query 실패: {}", logql, error));
+        } catch (Exception e) {
+            log.error("LogQL 인코딩 실패: {}", logql, e);
+            return reactor.core.publisher.Mono.error(e);
+        }
+    }
+
+    /**
+     * Range Query 실행
+     */
+    public Mono<LokiResponse> queryRange(String logql, long startSeconds, long endSeconds) {
+        log.debug("Loki range query: {} (start={}, end={})", logql, startSeconds, endSeconds);
+        try {
+            // LogQL을 URL 인코딩하여 직접 URI 구성 (중괄호가 URI 템플릿 변수로 해석되는 것을 방지)
+            String encodedQuery = java.net.URLEncoder.encode(logql, StandardCharsets.UTF_8)
+                    .replace("+", "%20"); // +를 %20으로 변환
+            URI uri = URI.create(baseUrl + "/loki/api/v1/query_range?query=" + encodedQuery 
+                    + "&start=" + startSeconds 
+                    + "&end=" + endSeconds);
+            return webClient.get()
+                    .uri(uri)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .retrieve()
+                    .bodyToMono(LokiResponse.class)
+                    .timeout(Duration.ofSeconds(30))
+                    .doOnError(error -> log.error("Loki range query 실패: {}", logql, error));
+        } catch (Exception e) {
+            log.error("LogQL 인코딩 실패: {}", logql, e);
+            return reactor.core.publisher.Mono.error(e);
+        }
+    }
+}
+

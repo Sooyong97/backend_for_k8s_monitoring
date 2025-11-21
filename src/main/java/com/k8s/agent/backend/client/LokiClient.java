@@ -5,14 +5,17 @@ import lombok.Data;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 
@@ -27,12 +30,34 @@ public class LokiClient {
     private final WebClient webClient;
     private final String baseUrl;
 
-    public LokiClient(WebClient.Builder builder, @Value("${loki.base-url}") String baseUrl) {
+    public LokiClient(WebClient.Builder builder, 
+                      @Value("${loki.base-url}") String baseUrl,
+                      @Value("${loki.username:}") String username,
+                      @Value("${loki.password:}") String password,
+                      @Value("${loki.api-key:}") String apiKey) {
         this.baseUrl = baseUrl;
-        this.webClient = builder
-                .baseUrl(baseUrl)
-                .build();
-        log.info("LokiClient 초기화 완료. Base URL: {}", baseUrl);
+        
+        // WebClient에 인증 헤더 추가
+        WebClient.Builder clientBuilder = builder.baseUrl(baseUrl);
+        
+        // Basic Auth (username/password가 제공된 경우)
+        if (StringUtils.hasText(username) && StringUtils.hasText(password)) {
+            String credentials = username + ":" + password;
+            String encodedCredentials = Base64.getEncoder().encodeToString(credentials.getBytes(StandardCharsets.UTF_8));
+            clientBuilder.defaultHeader(HttpHeaders.AUTHORIZATION, "Basic " + encodedCredentials);
+            log.info("LokiClient 초기화 완료. Base URL: {}, Basic Auth 사용", baseUrl);
+        }
+        // API Key (api-key가 제공된 경우)
+        else if (StringUtils.hasText(apiKey)) {
+            clientBuilder.defaultHeader("X-API-Key", apiKey);
+            log.info("LokiClient 초기화 완료. Base URL: {}, API Key 사용", baseUrl);
+        }
+        // 인증 없음
+        else {
+            log.info("LokiClient 초기화 완료. Base URL: {} (인증 없음)", baseUrl);
+        }
+        
+        this.webClient = clientBuilder.build();
     }
 
     @Data

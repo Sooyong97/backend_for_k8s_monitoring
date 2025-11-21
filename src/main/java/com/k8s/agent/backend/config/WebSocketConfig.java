@@ -16,7 +16,13 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
         // (예: ws://localhost:8080/ws)
         registry.addEndpoint("/ws")
                 // 모든 도메인에서의 접속을 허용 (CORS)
-                .setAllowedOriginPatterns("*").withSockJS();
+                .setAllowedOriginPatterns("*")
+                // SockJS 사용 (fallback 지원)
+                .withSockJS()
+                // SockJS 경로 경고 방지를 위한 설정
+                .setSessionCookieNeeded(false)
+                .setHeartbeatTime(25000)
+                .setDisconnectDelay(5000);
     }
 
     @Override

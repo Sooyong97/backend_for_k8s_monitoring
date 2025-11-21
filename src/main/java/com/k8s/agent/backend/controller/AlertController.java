@@ -2,6 +2,8 @@ package com.k8s.agent.backend.controller;
 
 import com.k8s.agent.backend.client.AiAgentClient;
 import com.k8s.agent.backend.dto.*;
+import com.k8s.agent.backend.entity.Alarm;
+import com.k8s.agent.backend.service.AlarmService;
 import com.k8s.agent.backend.service.ChatSessionService;
 import com.k8s.agent.backend.service.ChatSessionService.ChatSession;
 import org.slf4j.Logger;
@@ -17,6 +19,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.ResponseBody;
 
+import java.util.Map;
 import java.util.UUID;
 
 @Controller // @RestController가 아님 (WebSocket @MessageMapping을 포함하므로)
@@ -27,6 +30,7 @@ public class AlertController {
     @Autowired private SimpMessagingTemplate messagingTemplate;
     @Autowired private ChatSessionService chatSessionService;
     @Autowired private AiAgentClient aiAgentClient;
+    @Autowired private AlarmService alarmService;
 
     /**
      * [엔드포인트 1: For AI Agent (HTTP POST)]
@@ -35,20 +39,73 @@ public class AlertController {
      */
     @PostMapping("/api/v1/alerts/report")
     @ResponseBody // @Controller에서 JSON을 반환하기 위해 필요
-    public ResponseEntity<Void> receiveAiReport(@RequestBody AgentAnalysisResponse result) {
+    public ResponseEntity<?> receiveAiReport(@RequestBody AgentAnalysisResponse result) {
+        try {
+            // 요청 데이터 검증 및 로깅
+            log.info("AI Agent 리포트 수신. Status: {}, AnalysisType: {}, ServiceType: {}, FinalAnswer: {}", 
+                    result.getStatus(),
+                    result.getAnalysisType(),
+                    result.getServiceType(),
+                    result.getFinalAnswer() != null ? 
+                        (result.getFinalAnswer().length() > 100 ? 
+                            result.getFinalAnswer().substring(0, 100) + "..." : 
+                            result.getFinalAnswer()) : 
+                        "null");
 
-        // 1. 고유한 채팅방 ID 생성
-        String roomId = UUID.randomUUID().toString();
-        log.info("새 K8s 알람 수신. 새 채팅방 생성: {}", roomId);
+            // finalAnswer가 null이거나 비어있으면 에러
+            if (result.getFinalAnswer() == null || result.getFinalAnswer().trim().isEmpty()) {
+                log.error("AI Agent 리포트 수신 실패: finalAnswer가 비어있습니다. Status: {}, ErrorMessage: {}", 
+                        result.getStatus(), result.getErrorMessage());
+                return ResponseEntity.badRequest()
+                        .body(Map.of("status", "error", "message", "finalAnswer is required"));
+            }
 
-        // 2. Chat 세션 생성 (AI의 첫 답변을 '초기 컨텍스트'로 저장)
-        chatSessionService.createSession(roomId, result.getFinalAnswer());
+            // 1. 고유한 채팅방 ID 생성
+            String roomId = UUID.randomUUID().toString();
+            log.info("새 K8s 알람 수신. 새 채팅방 생성: {}", roomId);
 
-        // 3. 프론트엔드의 '/topic/notifications' 토픽으로 "새 방 생성" 알림 전송
-        NewChatRoomNotification notification = new NewChatRoomNotification(roomId, result);
-        messagingTemplate.convertAndSend("/topic/notifications", notification);
+            // 2. Chat 세션 생성 (AI의 첫 답변을 '초기 컨텍스트'로 저장)
+            chatSessionService.createSession(roomId, result.getFinalAnswer());
 
-        return ResponseEntity.ok().build();
+            // 3. 알람 생성 (AI 리포트를 알람으로 저장)
+            try {
+                CreateAlarmRequest alarmRequest = new CreateAlarmRequest();
+                alarmRequest.setType(Alarm.AlarmType.LOG);
+                alarmRequest.setSeverity(Alarm.Severity.CRITICAL);
+                alarmRequest.setTitle("K8s 알람 발생: " + (result.getServiceType() != null ? result.getServiceType() : "Unknown"));
+                alarmRequest.setMessage(result.getFinalAnswer());
+                alarmRequest.setSource("AI Agent");
+                
+                // metadata에 AI 리포트 전체 정보 저장
+                Map<String, Object> metadata = new java.util.HashMap<>();
+                metadata.put("finalAnswer", result.getFinalAnswer());
+                metadata.put("analysisType", result.getAnalysisType());
+                metadata.put("serviceType", result.getServiceType());
+                metadata.put("status", result.getStatus());
+                if (result.getErrorMessage() != null) {
+                    metadata.put("errorMessage", result.getErrorMessage());
+                }
+                metadata.put("roomId", roomId);
+                alarmRequest.setMetadata(metadata);
+                
+                log.info("알람 생성 시도: RoomId={}, Title={}", roomId, alarmRequest.getTitle());
+                Alarm createdAlarm = alarmService.createAlarm(alarmRequest);
+                log.info("AI 리포트를 알람으로 저장 완료. RoomId={}, AlarmId={}", roomId, createdAlarm.getId());
+            } catch (Exception e) {
+                log.error("알람 생성 실패 (채팅방은 생성됨). RoomId: {}", roomId, e);
+                // 알람 생성 실패해도 채팅방은 생성되므로 계속 진행
+            }
+
+            // 4. 프론트엔드의 '/topic/notifications' 토픽으로 "새 방 생성" 알림 전송
+            NewChatRoomNotification notification = new NewChatRoomNotification(roomId, result);
+            messagingTemplate.convertAndSend("/topic/notifications", notification);
+
+            return ResponseEntity.ok().build();
+        } catch (Exception e) {
+            log.error("AI Agent 리포트 처리 실패", e);
+            return ResponseEntity.status(org.springframework.http.HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("status", "error", "message", "Failed to process report: " + e.getMessage()));
+        }
     }
 
     /**

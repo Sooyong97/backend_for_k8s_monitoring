@@ -49,6 +49,15 @@ dependencies {
 
     implementation 'org.apache.commons:commons-pool2'
 
+    // JPA 및 데이터베이스 (알람 영구 저장용)
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'org.postgresql:postgresql'
+    // MySQL 사용 시 아래 주석 해제하고 PostgreSQL 의존성 제거
+    // runtimeOnly 'com.mysql:mysql-connector-j'
+
+    // Validation
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
+
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
 
     // 테스트

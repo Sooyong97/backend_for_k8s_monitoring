@@ -37,9 +37,16 @@ public class MetricsController {
             
             return prometheusClient.query(promql)
                     .map(response -> {
+                        List<Map<String, Object>> data = convertToSimpleFormat(response);
+                        
+                        // 데이터가 비어있으면 경고
+                        if (data.isEmpty()) {
+                            log.warn("CPU 메트릭 데이터가 비어있습니다. Prometheus 서버 상태를 확인하세요.");
+                        }
+                        
                         Map<String, Object> result = new HashMap<>();
                         result.put("status", "success");
-                        result.put("data", convertToSimpleFormat(response));
+                        result.put("data", data);
                         return ResponseEntity.ok(result);
                     })
                     .block();
@@ -62,9 +69,16 @@ public class MetricsController {
 
             return prometheusClient.queryRange(promql, start, end, step)
                     .map(response -> {
+                        List<Map<String, Object>> data = convertRangeToSimpleFormat(response);
+                        
+                        // 데이터가 비어있으면 경고 로그
+                        if (data.isEmpty()) {
+                            log.warn("CPU 범위 메트릭 데이터가 비어있습니다. Prometheus 서버 상태를 확인하세요.");
+                        }
+                        
                         Map<String, Object> result = new HashMap<>();
                         result.put("status", "success");
-                        result.put("data", convertRangeToSimpleFormat(response));
+                        result.put("data", data);
                         return ResponseEntity.ok(result);
                     })
                     .block();
@@ -84,9 +98,16 @@ public class MetricsController {
             
             return prometheusClient.query(promql)
                     .map(response -> {
+                        List<Map<String, Object>> data = convertToSimpleFormat(response);
+                        
+                        // 데이터가 비어있으면 경고
+                        if (data.isEmpty()) {
+                            log.warn("CPU 메트릭 데이터가 비어있습니다. Prometheus 서버 상태를 확인하세요.");
+                        }
+                        
                         Map<String, Object> result = new HashMap<>();
                         result.put("status", "success");
-                        result.put("data", convertToSimpleFormat(response));
+                        result.put("data", data);
                         return ResponseEntity.ok(result);
                     })
                     .block();
@@ -131,9 +152,16 @@ public class MetricsController {
             
             return prometheusClient.query(promql)
                     .map(response -> {
+                        List<Map<String, Object>> data = convertToSimpleFormat(response);
+                        
+                        // 데이터가 비어있으면 경고
+                        if (data.isEmpty()) {
+                            log.warn("CPU 메트릭 데이터가 비어있습니다. Prometheus 서버 상태를 확인하세요.");
+                        }
+                        
                         Map<String, Object> result = new HashMap<>();
                         result.put("status", "success");
-                        result.put("data", convertToSimpleFormat(response));
+                        result.put("data", data);
                         return ResponseEntity.ok(result);
                     })
                     .block();
@@ -153,9 +181,16 @@ public class MetricsController {
             
             return prometheusClient.query(promql)
                     .map(response -> {
+                        List<Map<String, Object>> data = convertToSimpleFormat(response);
+                        
+                        // 데이터가 비어있으면 경고
+                        if (data.isEmpty()) {
+                            log.warn("CPU 메트릭 데이터가 비어있습니다. Prometheus 서버 상태를 확인하세요.");
+                        }
+                        
                         Map<String, Object> result = new HashMap<>();
                         result.put("status", "success");
-                        result.put("data", convertToSimpleFormat(response));
+                        result.put("data", data);
                         return ResponseEntity.ok(result);
                     })
                     .block();

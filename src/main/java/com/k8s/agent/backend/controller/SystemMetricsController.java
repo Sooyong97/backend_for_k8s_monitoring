@@ -31,8 +31,9 @@ public class SystemMetricsController {
     @GetMapping("/cpu_cores")
     public ResponseEntity<Map<String, Object>> getCpuCores() {
         try {
-            // CPU core 수: node_cpu_seconds_total의 고유한 cpu 라벨 개수
-            String promql = "count(node_cpu_seconds_total{mode=\"idle\"}) by (instance)";
+            // CPU core 수: instance:node_num_cpu:sum 사용 (더 안정적)
+            // fallback: count(node_cpu_seconds_total{mode="idle"}) by (instance)
+            String promql = "instance:node_num_cpu:sum";
             
             var response = prometheusClient.query(promql).block();
             
@@ -46,11 +47,36 @@ public class SystemMetricsController {
                     Map<String, Object> result = new HashMap<>();
                     result.put("status", "success");
                     result.put("data", Map.of(
-                        "instance", firstResult.getMetric().get("instance"),
+                        "instance", firstResult.getMetric().getOrDefault("instance", "unknown"),
                         "cpu_cores", (int) cores
                     ));
                     return ResponseEntity.ok(result);
                 }
+            }
+            
+            // Fallback: count 방식 시도
+            try {
+                String fallbackPromql = "count(node_cpu_seconds_total{mode=\"idle\"}) by (instance)";
+                var fallbackResponse = prometheusClient.query(fallbackPromql).block();
+                
+                if (fallbackResponse != null && fallbackResponse.getData() != null && 
+                    fallbackResponse.getData().getResult() != null && !fallbackResponse.getData().getResult().isEmpty()) {
+                    
+                    var firstResult = fallbackResponse.getData().getResult().get(0);
+                    if (firstResult.getValue() != null && firstResult.getValue().size() >= 2) {
+                        double cores = Double.parseDouble(firstResult.getValue().get(1).toString());
+                        
+                        Map<String, Object> result = new HashMap<>();
+                        result.put("status", "success");
+                        result.put("data", Map.of(
+                            "instance", firstResult.getMetric().getOrDefault("instance", "unknown"),
+                            "cpu_cores", (int) cores
+                        ));
+                        return ResponseEntity.ok(result);
+                    }
+                }
+            } catch (Exception e) {
+                log.debug("CPU core 수 fallback 쿼리 실패", e);
             }
             
             return ResponseEntity.ok(Map.of("status", "success", "data", Map.of("cpu_cores", 0)));

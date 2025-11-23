@@ -52,21 +52,20 @@ public class AnomalyNotificationService {
 
     /**
      * 이상탐지 결과를 analyze 엔드포인트로 전송
+     * Prometheus에서 가져온 원본 메트릭 데이터를 그대로 전송
      * 중복 알림은 10분 단위로 한 번만 전송
      * @param node 노드 식별자
      * @param metricName 메트릭 이름
-     * @param value 현재 메트릭 값
      * @param severity 이상탐지 심각도
      * @param message 이상탐지 메시지
-     * @param additionalData 추가 데이터 (timestamp, instance 등)
+     * @param originalMetric Prometheus 원본 메트릭 데이터 (metric + value)
      */
     public void sendAnomalyNotification(
             String node,
             String metricName,
-            double value,
             AnomalyDetectionService.Severity severity,
             String message,
-            Map<String, Object> additionalData) {
+            Map<String, Object> originalMetric) {
         
         // 애플리케이션 종료 중이면 알림 전송 중단
         if (isShuttingDown.get()) {
@@ -93,22 +92,17 @@ public class AnomalyNotificationService {
         lastNotificationTime.put(notificationKey, currentTime);
         
         try {
-            // 전송할 JSON 데이터 구성
-            Map<String, Object> payload = new HashMap<>();
-            payload.put("node", node);
-            payload.put("metric_name", metricName);
-            payload.put("value", value);
+            // 원본 메트릭 데이터를 그대로 사용
+            Map<String, Object> payload = new HashMap<>(originalMetric);
+            
+            // 이상탐지 정보 추가
+            payload.put("anomaly_detected", true);
             payload.put("severity", severity.name());
             payload.put("message", message);
-            payload.put("timestamp", System.currentTimeMillis() / 1000); // Unix timestamp (초)
+            payload.put("detection_timestamp", currentTime);
             
-            // 추가 데이터 병합
-            if (additionalData != null) {
-                payload.putAll(additionalData);
-            }
-            
-            log.info("이상탐지 알림 전송: node={}, metric={}, severity={}, value={}", 
-                    node, metricName, severity, value);
+            log.info("이상탐지 알림 전송: node={}, metric={}, severity={}", 
+                    node, metricName, severity);
             log.debug("전송 데이터: {}", payload);
             
             // HTTP POST 전송 (비동기) - WebClient가 자동으로 JSON으로 변환

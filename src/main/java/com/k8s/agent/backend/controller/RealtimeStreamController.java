@@ -282,19 +282,19 @@ public class RealtimeStreamController {
                                             AnomalyDetectionService.AnomalyResult anomalyResult = 
                                                     anomalyDetectionService.detectAnomaly(node, metricName, value);
                                             
-                                            // 이상이 탐지되면 알림 전송
+                                            // 이상이 탐지되면 원본 메트릭 데이터를 그대로 전송
                                             if (anomalyResult.isAnomaly()) {
-                                                Map<String, Object> additionalData = new HashMap<>();
-                                                additionalData.put("instance", instance);
-                                                additionalData.put("metric", result.getMetric());
+                                                // Prometheus 원본 메트릭 데이터 구성
+                                                Map<String, Object> originalMetric = new HashMap<>();
+                                                originalMetric.put("metric", result.getMetric());
+                                                originalMetric.put("value", result.getValue());
                                                 
                                                 anomalyNotificationService.sendAnomalyNotification(
                                                         node,
                                                         metricName,
-                                                        value,
                                                         anomalyResult.getSeverity(),
                                                         anomalyResult.getMessage(),
-                                                        additionalData
+                                                        originalMetric
                                                 );
                                             }
                                         }

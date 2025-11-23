@@ -2,6 +2,8 @@ package com.k8s.agent.backend.controller;
 
 import com.k8s.agent.backend.client.LokiClient;
 import com.k8s.agent.backend.client.PrometheusClient;
+import com.k8s.agent.backend.service.AnomalyDetectionService;
+import com.k8s.agent.backend.service.AnomalyNotificationService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -34,6 +36,12 @@ public class RealtimeStreamController {
 
     @Autowired
     private LokiClient lokiClient;
+
+    @Autowired
+    private AnomalyDetectionService anomalyDetectionService;
+
+    @Autowired
+    private AnomalyNotificationService anomalyNotificationService;
 
     // 활성 구독자 추적
     private final Map<String, Boolean> activeSubscriptions = new ConcurrentHashMap<>();
@@ -95,7 +103,113 @@ public class RealtimeStreamController {
     }
 
     /**
-     * 10초마다 Node 메트릭 스트림 전송
+     * 10초마다 이상탐지 수행 (프론트엔드 구독 여부와 무관하게 항상 실행)
+     */
+    @Scheduled(fixedRate = 10000)
+    public void detectAnomalies() {
+        try {
+            long timestamp = Instant.now().getEpochSecond();
+            
+            // CPU 사용률 이상탐지
+            String cpuPromql = "100 - (avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)";
+            collectAndDetectAnomaly(cpuPromql, "cpu_usage_percent", timestamp);
+            
+            // Memory 사용률 이상탐지
+            String memoryPromql = "(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100";
+            collectAndDetectAnomaly(memoryPromql, "memory_usage_percent", timestamp);
+            
+            
+            // Disk Read IOPS 이상탐지
+            collectAndDetectAnomaly(
+                "sum by (instance) (rate(node_disk_reads_completed_total[5m]))",
+                "disk_read_iops",
+                timestamp
+            );
+            
+            // Disk Write IOPS
+            collectAndDetectAnomaly(
+                "sum by (instance) (rate(node_disk_writes_completed_total[5m]))",
+                "disk_write_iops",
+                timestamp
+            );
+            
+            // Disk Read Bytes
+            collectAndDetectAnomaly(
+                "sum by (instance) (rate(node_disk_read_bytes_total[5m]))",
+                "disk_read_bytes",
+                timestamp
+            );
+            
+            // Disk Write Bytes
+            collectAndDetectAnomaly(
+                "sum by (instance) (rate(node_disk_written_bytes_total[5m]))",
+                "disk_write_bytes",
+                timestamp
+            );
+            
+            // Network RX Bytes
+            collectAndDetectAnomaly(
+                "sum by (instance) (rate(node_network_receive_bytes_total{device!=\"lo\"}[5m]))",
+                "net_rx_bytes",
+                timestamp
+            );
+            
+            // Network TX Bytes
+            collectAndDetectAnomaly(
+                "sum by (instance) (rate(node_network_transmit_bytes_total{device!=\"lo\"}[5m]))",
+                "net_tx_bytes",
+                timestamp
+            );
+            
+            // Network RX Errors
+            collectAndDetectAnomaly(
+                "sum by (instance) (rate(node_network_receive_errs_total{device!=\"lo\"}[5m]))",
+                "net_rx_errors",
+                timestamp
+            );
+            
+            // Network TX Errors
+            collectAndDetectAnomaly(
+                "sum by (instance) (rate(node_network_transmit_errs_total{device!=\"lo\"}[5m]))",
+                "net_tx_errors",
+                timestamp
+            );
+            
+            // Network Dropped
+            collectAndDetectAnomaly(
+                "sum by (instance) (rate(node_network_receive_drop_total{device!=\"lo\"}[5m]) + rate(node_network_transmit_drop_total{device!=\"lo\"}[5m]))",
+                "net_dropped",
+                timestamp
+            );
+            
+            // Context Switches
+            collectAndDetectAnomaly(
+                "sum by (instance) (rate(node_context_switches_total[5m]))",
+                "context_switches",
+                timestamp
+            );
+            
+            // Packet Drops
+            collectAndDetectAnomaly(
+                "sum by (instance) (rate(node_network_receive_packets_dropped_total{device!=\"lo\"}[5m]))",
+                "packet_drops",
+                timestamp
+            );
+            
+            // TCP Retransmits
+            collectAndDetectAnomaly(
+                "sum by (instance) (rate(node_sockstat_TCP_retrans[5m]))",
+                "tcp_retransmits",
+                timestamp
+            );
+            
+        } catch (Exception e) {
+            log.error("이상탐지 수행 실패", e);
+        }
+    }
+
+    /**
+     * 10초마다 Node 메트릭 스트림 전송 (구독자가 있는 경우만)
      */
     @Scheduled(fixedRate = 10000)
     public void streamNodeMetrics() {
@@ -144,6 +258,54 @@ public class RealtimeStreamController {
         } catch (Exception e) {
             log.error("메트릭 스트림 전송 실패", e);
         }
+    }
+
+    /**
+     * 메트릭을 수집하고 이상탐지 수행
+     */
+    private void collectAndDetectAnomaly(String promql, String metricName, long timestamp) {
+        prometheusClient.query(promql)
+                .subscribe(
+                        response -> {
+                            if (response.getData() != null && response.getData().getResult() != null) {
+                                response.getData().getResult().forEach(result -> {
+                                    try {
+                                        // 노드 식별자 추출
+                                        String instance = result.getMetric().getOrDefault("instance", "unknown");
+                                        String node = instance.contains(":") ? instance.split(":")[0] : instance;
+                                        
+                                        // 메트릭 값 추출
+                                        if (result.getValue() != null && result.getValue().size() >= 2) {
+                                            double value = Double.parseDouble(result.getValue().get(1).toString());
+                                            
+                                            // 이상탐지 수행
+                                            AnomalyDetectionService.AnomalyResult anomalyResult = 
+                                                    anomalyDetectionService.detectAnomaly(node, metricName, value);
+                                            
+                                            // 이상이 탐지되면 알림 전송
+                                            if (anomalyResult.isAnomaly()) {
+                                                Map<String, Object> additionalData = new HashMap<>();
+                                                additionalData.put("instance", instance);
+                                                additionalData.put("metric", result.getMetric());
+                                                
+                                                anomalyNotificationService.sendAnomalyNotification(
+                                                        node,
+                                                        metricName,
+                                                        value,
+                                                        anomalyResult.getSeverity(),
+                                                        anomalyResult.getMessage(),
+                                                        additionalData
+                                                );
+                                            }
+                                        }
+                                    } catch (Exception e) {
+                                        log.error("메트릭 이상탐지 처리 실패: metric={}", metricName, e);
+                                    }
+                                });
+                            }
+                        },
+                        error -> log.error("메트릭 수집 실패: metric={}", metricName, error)
+                );
     }
 
     // Loki 응답을 간단한 형식으로 변환

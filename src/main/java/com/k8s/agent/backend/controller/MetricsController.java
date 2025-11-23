@@ -94,6 +94,7 @@ public class MetricsController {
     @GetMapping("/memory")
     public ResponseEntity<Map<String, Object>> getMemory() {
         try {
+            // by (instance) 추가하여 각 노드별로 메모리 사용률 반환
             String promql = "(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100";
             
             return prometheusClient.query(promql)
@@ -123,6 +124,7 @@ public class MetricsController {
     @GetMapping("/memory/range")
     public ResponseEntity<Map<String, Object>> getMemoryRange(@RequestParam(defaultValue = "5") int minutes) {
         try {
+            // by (instance) 추가하여 각 노드별로 메모리 사용률 반환
             String promql = "(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100";
             long end = Instant.now().getEpochSecond();
             long start = end - (minutes * 60);
@@ -223,6 +225,23 @@ public class MetricsController {
                     Map<String, String> metric = new HashMap<>(result.getMetric());
                     metric.put("direction", "received");
                     item.put("metric", metric);
+                    
+                    // 노드 정보를 최상위 레벨에 추가
+                    // 1. node 라벨이 있으면 우선 사용 (예: "node1", "node2")
+                    if (metric.containsKey("node")) {
+                        item.put("node", metric.get("node"));
+                    } else if (metric.containsKey("instance")) {
+                        // 2. node 라벨이 없으면 instance에서 IP/호스트명 추출
+                        String instance = metric.get("instance");
+                        String node = instance.split(":")[0];
+                        item.put("node", node);
+                    }
+                    
+                    // instance는 항상 포함
+                    if (metric.containsKey("instance")) {
+                        item.put("instance", metric.get("instance"));
+                    }
+                    
                     if (result.getValue() != null && result.getValue().size() >= 2) {
                         item.put("timestamp", result.getValue().get(0));
                         item.put("value", result.getValue().get(1));
@@ -237,6 +256,23 @@ public class MetricsController {
                     Map<String, String> metric = new HashMap<>(result.getMetric());
                     metric.put("direction", "transmitted");
                     item.put("metric", metric);
+                    
+                    // 노드 정보를 최상위 레벨에 추가
+                    // 1. node 라벨이 있으면 우선 사용 (예: "node1", "node2")
+                    if (metric.containsKey("node")) {
+                        item.put("node", metric.get("node"));
+                    } else if (metric.containsKey("instance")) {
+                        // 2. node 라벨이 없으면 instance에서 IP/호스트명 추출
+                        String instance = metric.get("instance");
+                        String node = instance.split(":")[0];
+                        item.put("node", node);
+                    }
+                    
+                    // instance는 항상 포함
+                    if (metric.containsKey("instance")) {
+                        item.put("instance", metric.get("instance"));
+                    }
+                    
                     if (result.getValue() != null && result.getValue().size() >= 2) {
                         item.put("timestamp", result.getValue().get(0));
                         item.put("value", result.getValue().get(1));
@@ -283,6 +319,22 @@ public class MetricsController {
                     metric.put("direction", "received");
                     item.put("metric", metric);
                     
+                    // 노드 정보를 최상위 레벨에 추가
+                    // 1. node 라벨이 있으면 우선 사용 (예: "node1", "node2")
+                    if (metric.containsKey("node")) {
+                        item.put("node", metric.get("node"));
+                    } else if (metric.containsKey("instance")) {
+                        // 2. node 라벨이 없으면 instance에서 IP/호스트명 추출
+                        String instance = metric.get("instance");
+                        String node = instance.split(":")[0];
+                        item.put("node", node);
+                    }
+                    
+                    // instance는 항상 포함
+                    if (metric.containsKey("instance")) {
+                        item.put("instance", metric.get("instance"));
+                    }
+                    
                     // values 배열 검증 및 필터링
                     List<List<Object>> values = result.getValues();
                     if (values == null || values.isEmpty()) {
@@ -304,6 +356,22 @@ public class MetricsController {
                     Map<String, String> metric = new HashMap<>(result.getMetric());
                     metric.put("direction", "transmitted");
                     item.put("metric", metric);
+                    
+                    // 노드 정보를 최상위 레벨에 추가
+                    // 1. node 라벨이 있으면 우선 사용 (예: "node1", "node2")
+                    if (metric.containsKey("node")) {
+                        item.put("node", metric.get("node"));
+                    } else if (metric.containsKey("instance")) {
+                        // 2. node 라벨이 없으면 instance에서 IP/호스트명 추출
+                        String instance = metric.get("instance");
+                        String node = instance.split(":")[0];
+                        item.put("node", node);
+                    }
+                    
+                    // instance는 항상 포함
+                    if (metric.containsKey("instance")) {
+                        item.put("instance", metric.get("instance"));
+                    }
                     
                     // values 배열 검증 및 필터링
                     List<List<Object>> values = result.getValues();
@@ -418,10 +486,30 @@ public class MetricsController {
             return List.of();
         }
         
-        return response.getData().getResult().stream()
+        List<Map<String, Object>> results = response.getData().getResult().stream()
                 .map(result -> {
                     Map<String, Object> item = new HashMap<>();
-                    item.put("metric", result.getMetric());
+                    Map<String, String> metric = result.getMetric();
+                    item.put("metric", metric);
+                    
+                    // 노드 정보를 최상위 레벨에 추가
+                    if (metric != null) {
+                        // 1. node 라벨이 있으면 우선 사용 (예: "node1", "node2")
+                        if (metric.containsKey("node")) {
+                            item.put("node", metric.get("node"));
+                        } else if (metric.containsKey("instance")) {
+                            // 2. node 라벨이 없으면 instance에서 IP/호스트명 추출
+                            String instance = metric.get("instance");
+                            String node = instance.split(":")[0];
+                            item.put("node", node);
+                        }
+                        
+                        // instance는 항상 포함
+                        if (metric.containsKey("instance")) {
+                            item.put("instance", metric.get("instance"));
+                        }
+                    }
+                    
                     if (result.getValue() != null && result.getValue().size() >= 2) {
                         item.put("timestamp", result.getValue().get(0));
                         item.put("value", result.getValue().get(1));
@@ -429,6 +517,32 @@ public class MetricsController {
                     return item;
                 })
                 .collect(Collectors.toList());
+        
+        // 멀티노드 확인을 위한 로그 (요약만 출력)
+        if (results.size() > 1) {
+            // 고유한 노드 수만 계산
+            long uniqueNodes = results.stream()
+                    .map(item -> {
+                        @SuppressWarnings("unchecked")
+                        Map<String, String> metric = (Map<String, String>) item.get("metric");
+                        if (metric != null && metric.containsKey("instance")) {
+                            return metric.get("instance").split(":")[0]; // IP만 추출
+                        }
+                        return null;
+                    })
+                    .filter(node -> node != null)
+                    .distinct()
+                    .count();
+            log.debug("멀티노드 메트릭 반환: {}개의 항목, {}개의 고유 노드", results.size(), uniqueNodes);
+        } else if (results.size() == 1) {
+            @SuppressWarnings("unchecked")
+            Map<String, String> metric = (Map<String, String>) results.get(0).get("metric");
+            if (metric != null && metric.containsKey("instance")) {
+                log.debug("단일 노드 메트릭 반환: instance={}", metric.get("instance"));
+            }
+        }
+        
+        return results;
     }
 
     // Range 응답을 간단한 형식으로 변환
@@ -438,10 +552,29 @@ public class MetricsController {
             return List.of();
         }
         
-        return response.getData().getResult().stream()
+        List<Map<String, Object>> results = response.getData().getResult().stream()
                 .map(result -> {
                     Map<String, Object> item = new HashMap<>();
-                    item.put("metric", result.getMetric());
+                    Map<String, String> metric = result.getMetric();
+                    item.put("metric", metric);
+                    
+                    // 노드 정보를 최상위 레벨에 추가
+                    if (metric != null) {
+                        // 1. node 라벨이 있으면 우선 사용 (예: "node1", "node2")
+                        if (metric.containsKey("node")) {
+                            item.put("node", metric.get("node"));
+                        } else if (metric.containsKey("instance")) {
+                            // 2. node 라벨이 없으면 instance에서 IP/호스트명 추출
+                            String instance = metric.get("instance");
+                            String node = instance.split(":")[0];
+                            item.put("node", node);
+                        }
+                        
+                        // instance는 항상 포함
+                        if (metric.containsKey("instance")) {
+                            item.put("instance", metric.get("instance"));
+                        }
+                    }
                     
                     // values 배열 검증 및 필터링
                     List<List<Object>> values = result.getValues();
@@ -465,6 +598,34 @@ public class MetricsController {
                     return item;
                 })
                 .collect(Collectors.toList());
+        
+        // 멀티노드 확인을 위한 로그 (요약만 출력)
+        if (results.size() > 1) {
+            // 고유한 노드 수만 계산
+            long uniqueNodes = results.stream()
+                    .map(item -> {
+                        @SuppressWarnings("unchecked")
+                        Map<String, String> metric = (Map<String, String>) item.get("metric");
+                        if (metric != null && metric.containsKey("instance")) {
+                            return metric.get("instance").split(":")[0]; // IP만 추출
+                        }
+                        return null;
+                    })
+                    .filter(node -> node != null)
+                    .distinct()
+                    .count();
+            log.debug("멀티노드 범위 메트릭 반환: {}개의 항목, {}개의 고유 노드", results.size(), uniqueNodes);
+        } else if (results.size() == 1) {
+            @SuppressWarnings("unchecked")
+            Map<String, String> metric = (Map<String, String>) results.get(0).get("metric");
+            if (metric != null && metric.containsKey("instance")) {
+                log.debug("단일 노드 범위 메트릭 반환: instance={}, values 개수: {}", 
+                        metric.get("instance"),
+                        ((List<?>) results.get(0).get("values")).size());
+            }
+        }
+        
+        return results;
     }
 }
 

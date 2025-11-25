@@ -9,6 +9,7 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
+import reactor.util.retry.Retry;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -77,8 +78,31 @@ public class LokiClient {
                     .accept(MediaType.APPLICATION_JSON)
                     .retrieve()
                     .bodyToMono(LokiResponse.class)
-                    .timeout(Duration.ofSeconds(10))
-                    .doOnError(error -> log.error("Loki query 실패: {}", logql, error));
+                    .timeout(Duration.ofSeconds(30)) // 10초 → 30초로 증가
+                    .retryWhen(Retry.backoff(2, Duration.ofSeconds(1))
+                            .filter(throwable -> {
+                                String errorMsg = throwable.getMessage();
+                                return errorMsg != null && (
+                                    errorMsg.contains("timeout") ||
+                                    errorMsg.contains("Timeout") ||
+                                    throwable instanceof java.util.concurrent.TimeoutException
+                                );
+                            })
+                            .doBeforeRetry(retrySignal ->
+                                log.debug("Loki query 재시도: {}, attempt={}", logql, retrySignal.totalRetries() + 1)
+                            )
+                    )
+                    .doOnError(error -> {
+                        String errorMsg = error.getMessage();
+                        if (errorMsg != null && errorMsg.contains("Connection refused")) {
+                            log.warn("Loki 서버 연결 실패 (연결 거부): {}", baseUrl);
+                        } else if (errorMsg != null && (errorMsg.contains("timeout") || errorMsg.contains("Timeout"))) {
+                            log.warn("Loki query 타임아웃: {}", logql);
+                        } else {
+                            log.error("Loki query 실패: {}, error={}", logql, 
+                                    errorMsg != null ? errorMsg : error.getClass().getSimpleName());
+                        }
+                    });
         } catch (Exception e) {
             log.error("LogQL 인코딩 실패: {}", logql, e);
             return reactor.core.publisher.Mono.error(e);
@@ -103,7 +127,30 @@ public class LokiClient {
                     .retrieve()
                     .bodyToMono(LokiResponse.class)
                     .timeout(Duration.ofSeconds(30))
-                    .doOnError(error -> log.error("Loki range query 실패: {}", logql, error));
+                    .retryWhen(Retry.backoff(2, Duration.ofSeconds(1))
+                            .filter(throwable -> {
+                                String errorMsg = throwable.getMessage();
+                                return errorMsg != null && (
+                                    errorMsg.contains("timeout") ||
+                                    errorMsg.contains("Timeout") ||
+                                    throwable instanceof java.util.concurrent.TimeoutException
+                                );
+                            })
+                            .doBeforeRetry(retrySignal ->
+                                log.debug("Loki range query 재시도: {}, attempt={}", logql, retrySignal.totalRetries() + 1)
+                            )
+                    )
+                    .doOnError(error -> {
+                        String errorMsg = error.getMessage();
+                        if (errorMsg != null && errorMsg.contains("Connection refused")) {
+                            log.warn("Loki 서버 연결 실패 (연결 거부): {}", baseUrl);
+                        } else if (errorMsg != null && (errorMsg.contains("timeout") || errorMsg.contains("Timeout"))) {
+                            log.warn("Loki range query 타임아웃: {}", logql);
+                        } else {
+                            log.error("Loki range query 실패: {}, error={}", logql, 
+                                    errorMsg != null ? errorMsg : error.getClass().getSimpleName());
+                        }
+                    });
         } catch (Exception e) {
             log.error("LogQL 인코딩 실패: {}", logql, e);
             return reactor.core.publisher.Mono.error(e);

@@ -94,4 +94,42 @@ public class AiAgentClient {
                     }
                 });
     }
+
+    /**
+     * AI 에이전트의 /chatm 엔드포인트를 호출하여 메뉴얼 전용 RAG 기반 답변을 받습니다.
+     */
+    public Mono<String> getManualChatResponse(List<ChatMessage> history, String userMessage) {
+        // 메뉴얼 채팅은 initialContext를 빈 문자열로 전송 (Python 서버가 null을 허용하지 않음)
+        ChatRequest request = new ChatRequest("", history, userMessage);
+
+        log.debug("AI Agent 메뉴얼 채팅 호출 시작. URL: {}/chatm, 사용자 메시지 길이: {}", baseUrl, userMessage.length());
+
+        return this.webClient.post()
+                .uri("/chatm") // AI Agent의 메뉴얼 전용 엔드포인트
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(request)
+                .retrieve()
+                .bodyToMono(ChatResponse.class)
+                .map(ChatResponse::getAiAnswer)
+                .timeout(Duration.ofSeconds(60))
+                .doOnSuccess(response -> {
+                    log.debug("AI Agent 메뉴얼 채팅 응답 수신 성공. 응답 길이: {}", response != null ? response.length() : 0);
+                })
+                .doOnError(error -> {
+                    if (error instanceof WebClientResponseException) {
+                        WebClientResponseException webClientError = (WebClientResponseException) error;
+                        HttpStatusCode status = webClientError.getStatusCode();
+                        String responseBody = webClientError.getResponseBodyAsString();
+                        log.error("AI Agent 메뉴얼 채팅 HTTP 에러 발생. Status: {}, URL: {}/chatm, Response Body: {}", 
+                                status, baseUrl, responseBody, webClientError);
+                    } else if (error instanceof java.util.concurrent.TimeoutException) {
+                        log.error("AI Agent 메뉴얼 채팅 호출 타임아웃 발생. URL: {}/chatm (60초 초과)", baseUrl, error);
+                    } else if (error instanceof java.net.ConnectException || 
+                               error.getMessage() != null && error.getMessage().contains("Connection refused")) {
+                        log.error("AI Agent 서버 연결 실패. URL: {}/chatm - 서버가 실행 중인지 확인하세요.", baseUrl, error);
+                    } else {
+                        log.error("AI Agent 메뉴얼 채팅 호출 중 예기치 않은 에러 발생. URL: {}/chatm", baseUrl, error);
+                    }
+                });
+    }
 }

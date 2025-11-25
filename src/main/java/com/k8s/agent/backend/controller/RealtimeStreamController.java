@@ -45,6 +45,10 @@ public class RealtimeStreamController {
 
     // 활성 구독자 추적
     private final Map<String, Boolean> activeSubscriptions = new ConcurrentHashMap<>();
+    
+    // ERROR 로그 중복 방지를 위한 마지막 처리된 로그 추적
+    // key = "stream_key:log_message_hash", value = timestamp
+    private final Map<String, Long> lastProcessedLogs = new ConcurrentHashMap<>();
 
     /**
      * 에러 로그 실시간 스트림 구독
@@ -110,101 +114,189 @@ public class RealtimeStreamController {
         try {
             long timestamp = Instant.now().getEpochSecond();
             
-            // CPU 사용률 이상탐지
-            String cpuPromql = "100 - (avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)";
+            // CPU 사용률 이상탐지 (모든 라벨 유지)
+            String cpuPromql = "100 - (avg by (instance, job, namespace, container, endpoint, pod, service) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)";
             collectAndDetectAnomaly(cpuPromql, "cpu_usage_percent", timestamp);
             
-            // Memory 사용률 이상탐지
+            // Memory 사용률 이상탐지 (모든 라벨 유지)
             String memoryPromql = "(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100";
             collectAndDetectAnomaly(memoryPromql, "memory_usage_percent", timestamp);
             
             
-            // Disk Read IOPS 이상탐지
+            // Disk Read IOPS 이상탐지 (모든 라벨 유지)
             collectAndDetectAnomaly(
-                "sum by (instance) (rate(node_disk_reads_completed_total[5m]))",
+                "sum by (instance, job, namespace, container, endpoint, pod, service) (rate(node_disk_reads_completed_total[5m]))",
                 "disk_read_iops",
                 timestamp
             );
             
-            // Disk Write IOPS
+            // Disk Write IOPS (모든 라벨 유지)
             collectAndDetectAnomaly(
-                "sum by (instance) (rate(node_disk_writes_completed_total[5m]))",
+                "sum by (instance, job, namespace, container, endpoint, pod, service) (rate(node_disk_writes_completed_total[5m]))",
                 "disk_write_iops",
                 timestamp
             );
             
-            // Disk Read Bytes
+            // Disk Read Bytes (모든 라벨 유지)
             collectAndDetectAnomaly(
-                "sum by (instance) (rate(node_disk_read_bytes_total[5m]))",
+                "sum by (instance, job, namespace, container, endpoint, pod, service) (rate(node_disk_read_bytes_total[5m]))",
                 "disk_read_bytes",
                 timestamp
             );
             
-            // Disk Write Bytes
+            // Disk Write Bytes (모든 라벨 유지)
             collectAndDetectAnomaly(
-                "sum by (instance) (rate(node_disk_written_bytes_total[5m]))",
+                "sum by (instance, job, namespace, container, endpoint, pod, service) (rate(node_disk_written_bytes_total[5m]))",
                 "disk_write_bytes",
                 timestamp
             );
             
-            // Network RX Bytes
+            // Network RX Bytes (모든 라벨 유지)
             collectAndDetectAnomaly(
-                "sum by (instance) (rate(node_network_receive_bytes_total{device!=\"lo\"}[5m]))",
+                "sum by (instance, job, namespace, container, endpoint, pod, service) (rate(node_network_receive_bytes_total{device!=\"lo\"}[5m]))",
                 "net_rx_bytes",
                 timestamp
             );
             
-            // Network TX Bytes
+            // Network TX Bytes (모든 라벨 유지)
             collectAndDetectAnomaly(
-                "sum by (instance) (rate(node_network_transmit_bytes_total{device!=\"lo\"}[5m]))",
+                "sum by (instance, job, namespace, container, endpoint, pod, service) (rate(node_network_transmit_bytes_total{device!=\"lo\"}[5m]))",
                 "net_tx_bytes",
                 timestamp
             );
             
-            // Network RX Errors
+            // Network RX Errors (모든 라벨 유지)
             collectAndDetectAnomaly(
-                "sum by (instance) (rate(node_network_receive_errs_total{device!=\"lo\"}[5m]))",
+                "sum by (instance, job, namespace, container, endpoint, pod, service) (rate(node_network_receive_errs_total{device!=\"lo\"}[5m]))",
                 "net_rx_errors",
                 timestamp
             );
             
-            // Network TX Errors
+            // Network TX Errors (모든 라벨 유지)
             collectAndDetectAnomaly(
-                "sum by (instance) (rate(node_network_transmit_errs_total{device!=\"lo\"}[5m]))",
+                "sum by (instance, job, namespace, container, endpoint, pod, service) (rate(node_network_transmit_errs_total{device!=\"lo\"}[5m]))",
                 "net_tx_errors",
                 timestamp
             );
             
-            // Network Dropped
+            // Network Dropped (모든 라벨 유지)
             collectAndDetectAnomaly(
-                "sum by (instance) (rate(node_network_receive_drop_total{device!=\"lo\"}[5m]) + rate(node_network_transmit_drop_total{device!=\"lo\"}[5m]))",
+                "sum by (instance, job, namespace, container, endpoint, pod, service) (rate(node_network_receive_drop_total{device!=\"lo\"}[5m]) + rate(node_network_transmit_drop_total{device!=\"lo\"}[5m]))",
                 "net_dropped",
                 timestamp
             );
             
-            // Context Switches
+            // Context Switches (모든 라벨 유지)
             collectAndDetectAnomaly(
-                "sum by (instance) (rate(node_context_switches_total[5m]))",
+                "sum by (instance, job, namespace, container, endpoint, pod, service) (rate(node_context_switches_total[5m]))",
                 "context_switches",
                 timestamp
             );
             
-            // Packet Drops
+            // Packet Drops (모든 라벨 유지)
             collectAndDetectAnomaly(
-                "sum by (instance) (rate(node_network_receive_packets_dropped_total{device!=\"lo\"}[5m]))",
+                "sum by (instance, job, namespace, container, endpoint, pod, service) (rate(node_network_receive_packets_dropped_total{device!=\"lo\"}[5m]))",
                 "packet_drops",
                 timestamp
             );
             
-            // TCP Retransmits
+            // TCP Retransmits (모든 라벨 유지)
             collectAndDetectAnomaly(
-                "sum by (instance) (rate(node_sockstat_TCP_retrans[5m]))",
+                "sum by (instance, job, namespace, container, endpoint, pod, service) (rate(node_sockstat_TCP_retrans[5m]))",
                 "tcp_retransmits",
                 timestamp
             );
             
         } catch (Exception e) {
             log.error("이상탐지 수행 실패", e);
+        }
+    }
+
+    /**
+     * 10초마다 ERROR 로그 감지 및 analyze 전송 (프론트엔드 구독 여부와 무관하게 항상 실행)
+     */
+    @Scheduled(fixedRate = 10000)
+    public void detectErrorLogs() {
+        try {
+            long end = Instant.now().getEpochSecond();
+            long start = end - 10; // 최근 10초간의 로그만 확인 (중복 방지)
+            
+            String logql = "{level=\"error\"} | json";
+            
+            lokiClient.queryRange(logql, start, end)
+                    .subscribe(
+                            response -> {
+                                if (response.getData() != null && response.getData().getResult() != null) {
+                                    response.getData().getResult().forEach(result -> {
+                                        try {
+                                            // 원본 로그 데이터 구성
+                                            Map<String, Object> logData = new HashMap<>();
+                                            logData.put("stream", result.getStream());
+                                            logData.put("values", result.getValues());
+                                            
+                                            // 각 로그 라인에 대해 처리
+                                            if (result.getValues() != null) {
+                                                result.getValues().forEach(logEntry -> {
+                                                    if (logEntry != null && logEntry.size() >= 2) {
+                                                        String logTimestamp = logEntry.get(0);
+                                                        String logMessage = logEntry.get(1);
+                                                        
+                                                        // 중복 체크: stream 라벨 + 로그 메시지 해시
+                                                        String streamKey = result.getStream() != null 
+                                                                ? result.getStream().toString() 
+                                                                : "unknown";
+                                                        String logHash = String.valueOf(logMessage.hashCode());
+                                                        String logKey = streamKey + ":" + logHash;
+                                                        
+                                                        // 이미 처리한 로그인지 확인
+                                                        Long lastProcessed = lastProcessedLogs.get(logKey);
+                                                        long logTime;
+                                                        try {
+                                                            // Loki 타임스탬프는 나노초 단위 문자열 (예: "1705747800000000000")
+                                                            // 나노초를 초로 변환
+                                                            if (logTimestamp.length() > 10) {
+                                                                logTime = Long.parseLong(logTimestamp.substring(0, 10));
+                                                            } else {
+                                                                logTime = Long.parseLong(logTimestamp);
+                                                            }
+                                                        } catch (NumberFormatException e) {
+                                                            log.warn("로그 타임스탬프 파싱 실패: {}", logTimestamp);
+                                                            logTime = Instant.now().getEpochSecond();
+                                                        }
+                                                        
+                                                        if (lastProcessed == null || logTime > lastProcessed) {
+                                                            // 새로운 로그이거나 더 최신 로그인 경우 전송
+                                                            lastProcessedLogs.put(logKey, logTime);
+                                                            
+                                                            // 로그 데이터 구성 (단일 로그 항목)
+                                                            Map<String, Object> singleLogData = new HashMap<>();
+                                                            singleLogData.put("stream", result.getStream());
+                                                            singleLogData.put("values", List.of(logEntry));
+                                                            
+                                                            // analyze로 전송
+                                                            anomalyNotificationService.sendErrorLogNotification(singleLogData);
+                                                        }
+                                                    }
+                                                });
+                                            }
+                                        } catch (Exception e) {
+                                            log.error("ERROR 로그 처리 실패", e);
+                                        }
+                                    });
+                                }
+                            },
+                                error -> {
+                                    String errorMsg = error.getMessage();
+                                    if (errorMsg != null && errorMsg.contains("Connection refused")) {
+                                        log.debug("Loki 서버 연결 실패로 ERROR 로그 수집 건너뜀");
+                                    } else {
+                                        log.warn("ERROR 로그 수집 실패: {}", 
+                                                errorMsg != null ? errorMsg : error.getClass().getSimpleName());
+                                    }
+                                }
+                    );
+        } catch (Exception e) {
+            log.error("ERROR 로그 감지 실패", e);
         }
     }
 
@@ -264,6 +356,11 @@ public class RealtimeStreamController {
      * 메트릭을 수집하고 이상탐지 수행
      */
     private void collectAndDetectAnomaly(String promql, String metricName, long timestamp) {
+        // disk_io 관련 메트릭은 이상탐지 비활성화
+        if (metricName.startsWith("disk_")) {
+            return;
+        }
+        
         prometheusClient.query(promql)
                 .subscribe(
                         response -> {
@@ -288,6 +385,9 @@ public class RealtimeStreamController {
                                                 Map<String, Object> originalMetric = new HashMap<>();
                                                 originalMetric.put("metric", result.getMetric());
                                                 originalMetric.put("value", result.getValue());
+                                                // 노드 정보를 최상위 레벨에 추가
+                                                originalMetric.put("node", node);
+                                                originalMetric.put("instance", instance);
                                                 
                                                 anomalyNotificationService.sendAnomalyNotification(
                                                         node,

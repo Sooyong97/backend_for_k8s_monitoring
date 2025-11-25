@@ -1,6 +1,7 @@
 package com.k8s.agent.backend.dto;
 
 import lombok.Data;
+import java.util.Map;
 
 /**
  * AI 에이전트의 분석 결과를 받는 표준 DTO.
@@ -24,4 +25,8 @@ public class AgentAnalysisResponse {
 
     // JSON: error_message ("에러 발생 시 내용")
     private String errorMessage;
+
+    // JSON: original_data (메트릭 및 로그 정보 포함)
+    // 구조: { "logs": [], "metrics": [{ "metric": {...}, "metric_name": "...", "value": [...], ... }] }
+    private Map<String, Object> originalData;
 }

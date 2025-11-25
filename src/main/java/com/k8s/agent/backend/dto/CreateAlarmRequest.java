@@ -27,5 +27,9 @@ public class CreateAlarmRequest {
 
     // metadata는 JSON 문자열 또는 객체 모두 받을 수 있음
     private Object metadata;
+
+    private String node; // 노드 정보 (예: "10.0.2.131")
+
+    private String tags; // 태그 정보 (JSON 배열 문자열)
 }
 

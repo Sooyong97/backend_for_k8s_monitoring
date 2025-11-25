@@ -58,6 +58,12 @@ public class Alarm {
     @Column(columnDefinition = "TEXT")
     private String metadata; // JSON 문자열로 저장
 
+    @Column(length = 255)
+    private String node; // 노드 정보 (예: "10.0.2.131")
+
+    @Column(columnDefinition = "TEXT")
+    private String tags; // 태그 정보 (JSON 배열 문자열로 저장)
+
     @Column
     @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd'T'HH:mm:ss")
     private LocalDateTime resolvedAt;

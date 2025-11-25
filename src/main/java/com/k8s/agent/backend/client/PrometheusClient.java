@@ -9,6 +9,7 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
+import reactor.util.retry.Retry;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -93,7 +94,20 @@ public class PrometheusClient {
                     .accept(MediaType.APPLICATION_JSON)
                     .retrieve()
                     .bodyToMono(PrometheusResponse.class)
-                    .timeout(Duration.ofSeconds(10))
+                    .timeout(Duration.ofSeconds(30)) // 10초 → 30초로 증가
+                    .retryWhen(Retry.backoff(2, Duration.ofSeconds(1))
+                            .filter(throwable -> {
+                                String errorMsg = throwable.getMessage();
+                                return errorMsg != null && (
+                                    errorMsg.contains("timeout") ||
+                                    errorMsg.contains("Timeout") ||
+                                    throwable instanceof java.util.concurrent.TimeoutException
+                                );
+                            })
+                            .doBeforeRetry(retrySignal ->
+                                log.debug("Prometheus query 재시도: {}, attempt={}", promql, retrySignal.totalRetries() + 1)
+                            )
+                    )
                     .doOnError(error -> log.error("Prometheus query 실패: {}", promql, error));
         } catch (Exception e) {
             log.error("PromQL 인코딩 실패: {}", promql, e);
@@ -121,6 +135,19 @@ public class PrometheusClient {
                     .retrieve()
                     .bodyToMono(PrometheusRangeResponse.class)
                     .timeout(Duration.ofSeconds(30))
+                    .retryWhen(Retry.backoff(2, Duration.ofSeconds(1))
+                            .filter(throwable -> {
+                                String errorMsg = throwable.getMessage();
+                                return errorMsg != null && (
+                                    errorMsg.contains("timeout") ||
+                                    errorMsg.contains("Timeout") ||
+                                    throwable instanceof java.util.concurrent.TimeoutException
+                                );
+                            })
+                            .doBeforeRetry(retrySignal ->
+                                log.debug("Prometheus range query 재시도: {}, attempt={}", promql, retrySignal.totalRetries() + 1)
+                            )
+                    )
                     .doOnError(error -> log.error("Prometheus range query 실패: {}", promql, error));
         } catch (Exception e) {
             log.error("PromQL 인코딩 실패: {}", promql, e);

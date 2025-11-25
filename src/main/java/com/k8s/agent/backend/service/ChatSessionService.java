@@ -8,6 +8,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 @Service
@@ -38,10 +39,17 @@ public class ChatSessionService {
         private String roomId;
         private String initialContext;
         private List<ChatMessage> history = new ArrayList<>();
+        private boolean isManualChat = false; // 메뉴얼 채팅 여부
 
         public ChatSession(String roomId, String initialContext) {
             this.roomId = roomId;
             this.initialContext = initialContext;
+        }
+
+        public ChatSession(String roomId, String initialContext, boolean isManualChat) {
+            this.roomId = roomId;
+            this.initialContext = initialContext;
+            this.isManualChat = isManualChat;
         }
     }
 
@@ -52,6 +60,23 @@ public class ChatSessionService {
         ChatSession session = new ChatSession(roomId, initialAnalysis);
 
         session.getHistory().add(new ChatMessage("ai", initialAnalysis));
+
+        // HSET "chat_sessions" "roomId" (session 객체 JSON)
+        redisTemplate.opsForHash().put(CHAT_SESSIONS_KEY, roomId, session);
+
+        // 24시간 뒤 세션 자동 삭제
+        redisTemplate.expire(CHAT_SESSIONS_KEY, SESSION_TIMEOUT_HOURS, TimeUnit.HOURS);
+
+        return session;
+    }
+
+    /**
+     * 메뉴얼 채팅 세션을 생성
+     */
+    public ChatSession createManualSession(String roomId) {
+        ChatSession session = new ChatSession(roomId, "메뉴얼 채팅입니다.", true);
+        
+        session.getHistory().add(new ChatMessage("ai", "메뉴얼 채팅입니다. 무엇을 도와드릴까요?"));
 
         // HSET "chat_sessions" "roomId" (session 객체 JSON)
         redisTemplate.opsForHash().put(CHAT_SESSIONS_KEY, roomId, session);
@@ -87,5 +112,36 @@ public class ChatSessionService {
             // 세션 만료 시간 갱신
             redisTemplate.expire(CHAT_SESSIONS_KEY, SESSION_TIMEOUT_HOURS, TimeUnit.HOURS);
         }
+    }
+
+    /**
+     * 모든 채팅 세션 목록 조회 (디버깅/통계용)
+     */
+    public List<ChatSession> getAllSessions() {
+        List<ChatSession> sessions = new ArrayList<>();
+        redisTemplate.opsForHash().values(CHAT_SESSIONS_KEY).forEach(value -> {
+            if (value instanceof ChatSession) {
+                sessions.add((ChatSession) value);
+            }
+        });
+        return sessions;
+    }
+
+    /**
+     * 채팅 세션 통계 조회
+     */
+    public Map<String, Object> getSessionStatistics() {
+        List<ChatSession> allSessions = getAllSessions();
+        long totalSessions = allSessions.size();
+        long manualChatSessions = allSessions.stream()
+                .filter(session -> session.isManualChat())
+                .count();
+        long alarmChatSessions = totalSessions - manualChatSessions;
+
+        Map<String, Object> stats = new java.util.HashMap<>();
+        stats.put("totalSessions", totalSessions);
+        stats.put("manualChatSessions", manualChatSessions);
+        stats.put("alarmChatSessions", alarmChatSessions);
+        return stats;
     }
 }

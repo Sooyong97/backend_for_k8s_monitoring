@@ -5,9 +5,11 @@
 ## 목차
 1. [컴파일 오류](#1-컴파일-오류)
 2. [AI Agent 통신 오류](#2-ai-agent-통신-오류)
-3. [메트릭 데이터 누락 문제](#3-메트릭-데이터-누락-문제)
-4. [중복 알림 전송 문제](#4-중복-알림-전송-문제)
-5. [애플리케이션 종료 시 오류](#5-애플리케이션-종료-시-오류)
+3. [Prometheus 통신 오류](#3-prometheus-통신-오류)
+4. [Loki 통신 오류](#4-loki-통신-오류)
+5. [메트릭 데이터 누락 문제](#5-메트릭-데이터-누락-문제)
+6. [중복 알림 전송 문제](#6-중복-알림-전송-문제)
+7. [애플리케이션 종료 시 오류](#7-애플리케이션-종료-시-오류)
 
 ---
 
@@ -142,7 +144,118 @@ request.setInitialContext(""); // 빈 문자열로 전송
 
 ---
 
-## 3. 메트릭 데이터 누락 문제
+## 3. Prometheus 통신 오류
+
+### 문제: Prometheus 쿼리 타임아웃
+
+**증상:**
+```
+java.util.concurrent.TimeoutException: Did not observe any item or terminal signal within 10000ms in 'flatMap' (and no fallback has been configured)
+```
+
+**발생 위치:**
+- `PrometheusClient.query()` 메서드
+- `MetricsController`의 CPU, Memory, Disk, System 메트릭 조회
+- `RealtimeStreamController`의 이상탐지 메트릭 수집
+
+**원인:**
+- Prometheus 서버 응답 시간이 10초를 초과
+- 복잡한 PromQL 쿼리나 서버 부하로 인한 지연
+- 네트워크 지연
+
+**해결 방법:**
+
+1. **타임아웃 시간 증가**: 10초 → 30초
+2. **재시도 로직 추가**: 최대 2번 재시도 (총 3번 시도)
+3. **재시도 조건 필터링**: 타임아웃 오류만 재시도
+
+```java
+return webClient.get()
+    .uri(uri)
+    .accept(MediaType.APPLICATION_JSON)
+    .retrieve()
+    .bodyToMono(PrometheusResponse.class)
+    .timeout(Duration.ofSeconds(30)) // 10초 → 30초로 증가
+    .retryWhen(Retry.backoff(2, Duration.ofSeconds(1)) // 최대 2번 재시도
+        .filter(throwable -> {
+            String errorMsg = throwable.getMessage();
+            return errorMsg != null && (
+                errorMsg.contains("timeout") ||
+                errorMsg.contains("Timeout") ||
+                throwable instanceof java.util.concurrent.TimeoutException
+            );
+        })
+    )
+    .doOnError(error -> log.error("Prometheus query 실패: {}", promql, error));
+```
+
+**참고 파일:**
+- `src/main/java/com/k8s/agent/backend/client/PrometheusClient.java`
+- `query()` 메서드 및 `queryRange()` 메서드
+
+---
+
+## 4. Loki 통신 오류
+
+### 문제: Loki 서버 연결 거부 및 긴 에러 로그
+
+**증상:**
+```
+Connection refused: /10.0.2.189:32001
+```
+- Loki 서버에 연결할 수 없을 때 전체 스택 트레이스 출력 (400+ 줄)
+- 연결 거부 오류가 ERROR 레벨로 로깅되어 로그가 지나치게 상세함
+
+**원인:**
+- Loki 서버가 다운되어 있거나 네트워크 문제
+- 일시적인 연결 문제
+- 타임아웃 설정이 짧음 (10초)
+
+**해결 방법:**
+
+1. **타임아웃 시간 증가**: 10초 → 30초
+2. **재시도 로직 추가**: 타임아웃 오류만 재시도 (연결 거부는 재시도하지 않음)
+3. **에러 로깅 간소화**: 연결 거부는 WARN 레벨로 간단히 로깅
+
+```java
+return webClient.get()
+    .uri(uri)
+    .accept(MediaType.APPLICATION_JSON)
+    .retrieve()
+    .bodyToMono(LokiResponse.class)
+    .timeout(Duration.ofSeconds(30)) // 10초 → 30초로 증가
+    .retryWhen(Retry.backoff(2, Duration.ofSeconds(1)) // 타임아웃만 재시도
+        .filter(throwable -> {
+            String errorMsg = throwable.getMessage();
+            return errorMsg != null && (
+                errorMsg.contains("timeout") ||
+                errorMsg.contains("Timeout") ||
+                throwable instanceof java.util.concurrent.TimeoutException
+            );
+        })
+    )
+    .doOnError(error -> {
+        String errorMsg = error.getMessage();
+        if (errorMsg != null && errorMsg.contains("Connection refused")) {
+            log.warn("Loki 서버 연결 실패 (연결 거부): {}", baseUrl);
+        } else if (errorMsg != null && (errorMsg.contains("timeout") || errorMsg.contains("Timeout"))) {
+            log.warn("Loki query 타임아웃: {}", logql);
+        } else {
+            log.error("Loki query 실패: {}, error={}", logql, 
+                    errorMsg != null ? errorMsg : error.getClass().getSimpleName());
+        }
+    });
+```
+
+**참고 파일:**
+- `src/main/java/com/k8s/agent/backend/client/LokiClient.java`
+- `query()` 메서드 및 `queryRange()` 메서드
+- `src/main/java/com/k8s/agent/backend/controller/RealtimeStreamController.java`
+- `detectErrorLogs()` 메서드
+
+---
+
+## 5. 메트릭 데이터 누락 문제
 
 ### 3.1 job, namespace 라벨 누락
 
@@ -235,7 +348,7 @@ payload.put("detection_timestamp", currentTime);
 
 ---
 
-## 4. 중복 알림 전송 문제
+## 6. 중복 알림 전송 문제
 
 ### 문제: 같은 이상이 계속 전송됨
 
@@ -295,7 +408,7 @@ lastSeverityMap.put(baseKey, severity.name());
 
 ---
 
-## 5. 애플리케이션 종료 시 오류
+## 7. 애플리케이션 종료 시 오류
 
 ### 문제: 종료 중 알림 전송 시도로 인한 오류
 

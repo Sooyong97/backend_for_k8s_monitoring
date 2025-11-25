@@ -122,6 +122,8 @@ public class AlarmService {
         alarm.setSource(request.getSource());
         alarm.setTimestamp(LocalDateTime.now());
         alarm.setResolved(false);
+        alarm.setNode(request.getNode());
+        alarm.setTags(request.getTags());
 
         // metadata를 JSON 문자열로 변환
         if (request.getMetadata() != null) {

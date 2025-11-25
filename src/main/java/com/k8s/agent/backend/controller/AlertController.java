@@ -15,12 +15,14 @@ import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Controller;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.ResponseBody;
+import reactor.core.publisher.Mono;
 
-import java.util.Map;
-import java.util.UUID;
+import java.util.*;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 @Controller // @RestController가 아님 (WebSocket @MessageMapping을 포함하므로)
 public class AlertController {
@@ -31,6 +33,7 @@ public class AlertController {
     @Autowired private ChatSessionService chatSessionService;
     @Autowired private AiAgentClient aiAgentClient;
     @Autowired private AlarmService alarmService;
+    @Autowired private ObjectMapper objectMapper;
 
     /**
      * [엔드포인트 1: For AI Agent (HTTP POST)]
@@ -69,10 +72,33 @@ public class AlertController {
 
             // 3. 알람 생성 (AI 리포트를 알람으로 저장)
             try {
+                // original_data 추출
+                Map<String, Object> originalData = result.getOriginalData();
+                
+                // 노드 정보 추출
+                String nodeName = extractNodeName(originalData);
+                
+                // 기본 제목 생성
+                String titleBase = extractTitleBase(result, originalData);
+                
+                // 노드 정보가 있으면 제목에 추가
+                String title = nodeName != null 
+                    ? String.format("[%s] %s", nodeName, titleBase) 
+                    : titleBase;
+                
+                // 태그 생성
+                List<String> tags = extractTags(originalData, nodeName);
+                
+                // severity 추출
+                Alarm.Severity severity = extractSeverity(originalData);
+                
+                // type 추출
+                Alarm.AlarmType alarmType = extractAlarmType(originalData);
+                
                 CreateAlarmRequest alarmRequest = new CreateAlarmRequest();
-                alarmRequest.setType(Alarm.AlarmType.LOG);
-                alarmRequest.setSeverity(Alarm.Severity.CRITICAL);
-                alarmRequest.setTitle("K8s 알람 발생: " + (result.getServiceType() != null ? result.getServiceType() : "Unknown"));
+                alarmRequest.setType(alarmType);
+                alarmRequest.setSeverity(severity);
+                alarmRequest.setTitle(title); // 파싱된 제목 사용
                 alarmRequest.setMessage(result.getFinalAnswer());
                 alarmRequest.setSource("AI Agent");
                 
@@ -86,11 +112,21 @@ public class AlertController {
                     metadata.put("errorMessage", result.getErrorMessage());
                 }
                 metadata.put("roomId", roomId);
+                if (originalData != null) {
+                    metadata.put("originalData", originalData);
+                }
                 alarmRequest.setMetadata(metadata);
                 
-                log.info("알람 생성 시도: RoomId={}, Title={}", roomId, alarmRequest.getTitle());
+                // node와 tags 설정
+                alarmRequest.setNode(nodeName);
+                alarmRequest.setTags(tags.isEmpty() ? null : objectMapper.writeValueAsString(tags));
+                
+                log.info("알람 생성 시도: RoomId={}, Title={}, Node={}, Tags={}", 
+                        roomId, title, nodeName, tags);
                 Alarm createdAlarm = alarmService.createAlarm(alarmRequest);
-                log.info("AI 리포트를 알람으로 저장 완료. RoomId={}, AlarmId={}", roomId, createdAlarm.getId());
+                
+                log.info("AI 리포트를 알람으로 저장 완료. RoomId={}, AlarmId={}, Title={}", 
+                        roomId, createdAlarm.getId(), title);
             } catch (Exception e) {
                 log.error("알람 생성 실패 (채팅방은 생성됨). RoomId: {}", roomId, e);
                 // 알람 생성 실패해도 채팅방은 생성되므로 계속 진행
@@ -106,6 +142,166 @@ public class AlertController {
             return ResponseEntity.status(org.springframework.http.HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of("status", "error", "message", "Failed to process report: " + e.getMessage()));
         }
+    }
+
+    /**
+     * 노드 정보 추출 (프론트엔드와 동일한 로직)
+     */
+    private String extractNodeName(Map<String, Object> originalData) {
+        if (originalData == null) {
+            return null;
+        }
+
+        // 1순위: original_data.node
+        if (originalData.containsKey("node")) {
+            Object node = originalData.get("node");
+            return node != null ? String.valueOf(node) : null;
+        }
+
+        // 2순위: original_data.metric.node
+        if (originalData.containsKey("metric")) {
+            Object metricObj = originalData.get("metric");
+            if (metricObj instanceof Map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> metric = (Map<String, Object>) metricObj;
+                if (metric.containsKey("node")) {
+                    Object node = metric.get("node");
+                    return node != null ? String.valueOf(node) : null;
+                }
+            }
+        }
+
+        // 3순위: original_data.instance에서 IP 추출
+        if (originalData.containsKey("instance")) {
+            Object instanceObj = originalData.get("instance");
+            if (instanceObj != null) {
+                String instance = String.valueOf(instanceObj);
+                if (instance.contains(":")) {
+                    return instance.split(":")[0];
+                }
+                return instance;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * 기본 제목 추출
+     */
+    private String extractTitleBase(AgentAnalysisResponse result, Map<String, Object> originalData) {
+        // 1순위: original_data.message
+        if (originalData != null && originalData.containsKey("message")) {
+            Object messageObj = originalData.get("message");
+            if (messageObj != null) {
+                String message = String.valueOf(messageObj);
+                if (!message.trim().isEmpty()) {
+                    return message;
+                }
+            }
+        }
+
+        // 2순위: finalAnswer의 첫 부분 사용
+        if (result.getFinalAnswer() != null && !result.getFinalAnswer().trim().isEmpty()) {
+            String finalAnswer = result.getFinalAnswer();
+            // 첫 문장만 사용 (줄바꿈이나 마침표 기준)
+            String firstSentence = finalAnswer.split("[\\n\\.]")[0].trim();
+            if (!firstSentence.isEmpty() && firstSentence.length() <= 100) {
+                return firstSentence;
+            }
+            // 너무 길면 앞부분만 사용
+            return finalAnswer.length() > 100 ? finalAnswer.substring(0, 100) + "..." : finalAnswer;
+        }
+
+        // 3순위: severity 기반 기본 제목
+        String severity = extractSeverityString(originalData);
+        return String.format("K8s Alert (%s)", severity);
+    }
+
+    /**
+     * 태그 생성
+     */
+    private List<String> extractTags(Map<String, Object> originalData, String nodeName) {
+        List<String> tags = new ArrayList<>();
+
+        if (nodeName != null) {
+            tags.add(nodeName);
+        }
+
+        if (originalData != null) {
+            // metric_name 추가
+            if (originalData.containsKey("metric_name")) {
+                Object metricNameObj = originalData.get("metric_name");
+                if (metricNameObj != null) {
+                    tags.add(String.valueOf(metricNameObj));
+                }
+            }
+
+            // namespace 추가
+            if (originalData.containsKey("namespace")) {
+                Object namespaceObj = originalData.get("namespace");
+                if (namespaceObj != null) {
+                    tags.add(String.valueOf(namespaceObj));
+                }
+            }
+
+            // metric.namespace도 확인
+            if (originalData.containsKey("metric")) {
+                Object metricObj = originalData.get("metric");
+                if (metricObj instanceof Map) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> metric = (Map<String, Object>) metricObj;
+                    if (metric.containsKey("namespace")) {
+                        Object namespaceObj = metric.get("namespace");
+                        if (namespaceObj != null && !tags.contains(String.valueOf(namespaceObj))) {
+                            tags.add(String.valueOf(namespaceObj));
+                        }
+                    }
+                }
+            }
+        }
+
+        return tags;
+    }
+
+    /**
+     * Severity 추출
+     */
+    private Alarm.Severity extractSeverity(Map<String, Object> originalData) {
+        if (originalData != null && originalData.containsKey("severity")) {
+            try {
+                String severityStr = String.valueOf(originalData.get("severity"));
+                return Alarm.Severity.valueOf(severityStr.toUpperCase());
+            } catch (IllegalArgumentException e) {
+                log.debug("Invalid severity value: {}", originalData.get("severity"));
+            }
+        }
+        return Alarm.Severity.CRITICAL; // 기본값
+    }
+
+    /**
+     * Severity 문자열 추출
+     */
+    private String extractSeverityString(Map<String, Object> originalData) {
+        if (originalData != null && originalData.containsKey("severity")) {
+            return String.valueOf(originalData.get("severity")).toUpperCase();
+        }
+        return "CRITICAL";
+    }
+
+    /**
+     * AlarmType 추출
+     */
+    private Alarm.AlarmType extractAlarmType(Map<String, Object> originalData) {
+        if (originalData != null && originalData.containsKey("data_type")) {
+            String dataType = String.valueOf(originalData.get("data_type"));
+            if ("log".equalsIgnoreCase(dataType)) {
+                return Alarm.AlarmType.LOG;
+            } else if ("metric".equalsIgnoreCase(dataType)) {
+                return Alarm.AlarmType.METRIC;
+            }
+        }
+        return Alarm.AlarmType.LOG; // 기본값
     }
 
     /**
@@ -128,18 +324,21 @@ public class AlertController {
         // 2. 사용자 메시지를 대화 내역에 추가
         chatSessionService.addMessageToHistory(roomId, "user", userMessage.getContent());
 
-        // 3. AI Agent의 /chat 엔드포인트 호출 (비동기)
-        log.info("Room[{}]: AI Agent 호출 시작. InitialContext 길이: {}, History 크기: {}, UserMessage: {}", 
-                roomId, 
+        // 3. AI Agent 호출 (메뉴얼 채팅인지 확인)
+        boolean isManualChat = session.isManualChat();
+        log.info("Room[{}]: AI Agent 호출 시작. ManualChat: {}, InitialContext 길이: {}, History 크기: {}, UserMessage: {}", 
+                roomId,
+                isManualChat,
                 session.getInitialContext() != null ? session.getInitialContext().length() : 0,
                 session.getHistory() != null ? session.getHistory().size() : 0,
                 userMessage.getContent());
         
-        aiAgentClient.getChatResponse(
-                session.getInitialContext(),
-                session.getHistory(),
-                userMessage.getContent()
-        ).subscribe(aiAnswer -> {
+        // 메뉴얼 채팅이면 /chatm, 일반 채팅이면 /chat 호출
+        Mono<String> aiResponseMono = isManualChat 
+            ? aiAgentClient.getManualChatResponse(session.getHistory(), userMessage.getContent())
+            : aiAgentClient.getChatResponse(session.getInitialContext(), session.getHistory(), userMessage.getContent());
+        
+        aiResponseMono.subscribe(aiAnswer -> {
             // 4. AI의 답변을 대화 내역에 추가
             if (aiAnswer == null || aiAnswer.trim().isEmpty()) {
                 log.warn("Room[{}]: AI 답변이 비어있습니다.", roomId);
@@ -249,5 +448,52 @@ public class AlertController {
             AiMessage errorMsg = new AiMessage(errorMessage, "ai");
             messagingTemplate.convertAndSend("/topic/room/" + roomId, errorMsg);
         });
+    }
+
+    /**
+     * [엔드포인트 3: For Frontend (HTTP POST)]
+     * 메뉴얼 전용 RAG 채팅방 생성 엔드포인트
+     * 프론트엔드에서 새 메뉴얼 채팅을 생성할 때 호출
+     */
+    @PostMapping("/api/chatm")
+    @ResponseBody
+    public ResponseEntity<?> createManualChatRoom() {
+        try {
+            // 1. 고유한 채팅방 ID 생성
+            String roomId = UUID.randomUUID().toString();
+            log.info("새 메뉴얼 채팅방 생성: {}", roomId);
+
+            // 2. 메뉴얼 채팅 세션 생성
+            chatSessionService.createManualSession(roomId);
+
+            // 3. roomId 반환
+            return ResponseEntity.ok(Map.of(
+                "status", "success",
+                "roomId", roomId,
+                "room_id", roomId  // 프론트엔드 호환성을 위해 둘 다 제공
+            ));
+        } catch (Exception e) {
+            log.error("메뉴얼 채팅방 생성 실패", e);
+            return ResponseEntity.status(org.springframework.http.HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("status", "error", "message", "Failed to create manual chat room: " + e.getMessage()));
+        }
+    }
+
+    /**
+     * [엔드포인트 4: For Debugging/Statistics]
+     * 채팅 세션 통계 조회 (디버깅용)
+     * GET /api/chats/stats
+     */
+    @GetMapping("/api/chats/stats")
+    @ResponseBody
+    public ResponseEntity<?> getChatStatistics() {
+        try {
+            Map<String, Object> stats = chatSessionService.getSessionStatistics();
+            return ResponseEntity.ok(stats);
+        } catch (Exception e) {
+            log.error("채팅 세션 통계 조회 실패", e);
+            return ResponseEntity.status(org.springframework.http.HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("status", "error", "message", "Failed to get chat statistics: " + e.getMessage()));
+        }
     }
 }

@@ -84,6 +84,8 @@ public class AnomalyNotificationService {
      * @param logData Loki 원본 로그 데이터 (stream + values)
      */
     public void sendErrorLogNotification(Map<String, Object> logData) {
+        log.debug("sendErrorLogNotification 호출됨: logData={}", logData);
+        
         // stream에서 노드 정보 추출
         @SuppressWarnings("unchecked")
         Map<String, String> stream = (Map<String, String>) logData.get("stream");
@@ -106,6 +108,9 @@ public class AnomalyNotificationService {
         if (values != null && !values.isEmpty() && values.get(0).size() >= 2) {
             logMessage = values.get(0).get(1); // 첫 번째 로그 라인
         }
+        
+        log.info("ERROR 로그 알림 전송 시작: node={}, message={}", node, 
+                logMessage.length() > 100 ? logMessage.substring(0, 100) + "..." : logMessage);
         
         sendNotification(node, "error_log", AnomalyDetectionService.Severity.CRITICAL, 
                         logMessage, logData, "log");

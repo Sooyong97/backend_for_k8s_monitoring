@@ -157,28 +157,28 @@ public class RealtimeStreamController {
                 "net_rx_bytes",
                 timestamp
             );
-            
+
             // Network TX Bytes (모든 라벨 유지)
             collectAndDetectAnomaly(
                 "sum by (instance, job, namespace, container, endpoint, pod, service) (rate(node_network_transmit_bytes_total{device!=\"lo\"}[5m]))",
                 "net_tx_bytes",
                 timestamp
             );
-            
+
             // Network RX Errors (모든 라벨 유지)
             collectAndDetectAnomaly(
                 "sum by (instance, job, namespace, container, endpoint, pod, service) (rate(node_network_receive_errs_total{device!=\"lo\"}[5m]))",
                 "net_rx_errors",
                 timestamp
             );
-            
+
             // Network TX Errors (모든 라벨 유지)
             collectAndDetectAnomaly(
                 "sum by (instance, job, namespace, container, endpoint, pod, service) (rate(node_network_transmit_errs_total{device!=\"lo\"}[5m]))",
                 "net_tx_errors",
                 timestamp
             );
-            
+
             // Network Dropped (모든 라벨 유지)
             collectAndDetectAnomaly(
                 "sum by (instance, job, namespace, container, endpoint, pod, service) (rate(node_network_receive_drop_total{device!=\"lo\"}[5m]) + rate(node_network_transmit_drop_total{device!=\"lo\"}[5m]))",
@@ -213,21 +213,28 @@ public class RealtimeStreamController {
     }
 
     /**
-     * 10초마다 ERROR 로그 감지 및 analyze 전송 (프론트엔드 구독 여부와 무관하게 항상 실행)
+     * 10분마다 ERROR 로그 감지 및 analyze 전송 (프론트엔드 구독 여부와 무관하게 항상 실행)
      */
-    @Scheduled(fixedRate = 10000)
+    @Scheduled(fixedRate = 600000) // 10분 = 600,000ms
     public void detectErrorLogs() {
         try {
             long end = Instant.now().getEpochSecond();
-            long start = end - 10; // 최근 10초간의 로그만 확인 (중복 방지)
+            long start = end - 600; // 최근 10분간의 로그만 확인 (중복 방지)
             
             String logql = "{level=\"error\"} | json";
             
+            log.info("ERROR 로그 수집 시작: start={}, end={}", start, end);
             lokiClient.queryRange(logql, start, end)
                     .subscribe(
                             response -> {
                                 if (response.getData() != null && response.getData().getResult() != null) {
-                                    response.getData().getResult().forEach(result -> {
+                                    int totalLogs = response.getData().getResult().size();
+                                    log.info("ERROR 로그 수집 완료: 총 {}개 스트림 발견", totalLogs);
+                                    
+                                    int processedCount = 0;
+                                    int sentCount = 0;
+                                    
+                                    for (LokiClient.LokiResponse.LokiData.LokiResult result : response.getData().getResult()) {
                                         try {
                                             // 원본 로그 데이터 구성
                                             Map<String, Object> logData = new HashMap<>();
@@ -236,8 +243,9 @@ public class RealtimeStreamController {
                                             
                                             // 각 로그 라인에 대해 처리
                                             if (result.getValues() != null) {
-                                                result.getValues().forEach(logEntry -> {
+                                                for (List<String> logEntry : result.getValues()) {
                                                     if (logEntry != null && logEntry.size() >= 2) {
+                                                        processedCount++;
                                                         String logTimestamp = logEntry.get(0);
                                                         String logMessage = logEntry.get(1);
                                                         
@@ -273,16 +281,27 @@ public class RealtimeStreamController {
                                                             singleLogData.put("stream", result.getStream());
                                                             singleLogData.put("values", List.of(logEntry));
                                                             
+                                                            log.info("ERROR 로그 전송 시도: logKey={}, message={}", logKey, 
+                                                                    logMessage.length() > 100 ? logMessage.substring(0, 100) + "..." : logMessage);
+                                                            
                                                             // analyze로 전송
                                                             anomalyNotificationService.sendErrorLogNotification(singleLogData);
+                                                            sentCount++;
+                                                        } else {
+                                                            log.debug("중복 로그 건너뜀: logKey={}, lastProcessed={}, logTime={}", 
+                                                                    logKey, lastProcessed, logTime);
                                                         }
                                                     }
-                                                });
+                                                }
                                             }
                                         } catch (Exception e) {
                                             log.error("ERROR 로그 처리 실패", e);
                                         }
-                                    });
+                                    }
+                                    
+                                    log.info("ERROR 로그 처리 완료: 총 {}개 처리, {}개 전송", processedCount, sentCount);
+                                } else {
+                                    log.debug("ERROR 로그 수집 결과: 데이터 없음");
                                 }
                             },
                                 error -> {
@@ -356,11 +375,6 @@ public class RealtimeStreamController {
      * 메트릭을 수집하고 이상탐지 수행
      */
     private void collectAndDetectAnomaly(String promql, String metricName, long timestamp) {
-        // disk_io 관련 메트릭은 이상탐지 비활성화
-        if (metricName.startsWith("disk_")) {
-            return;
-        }
-        
         prometheusClient.query(promql)
                 .subscribe(
                         response -> {

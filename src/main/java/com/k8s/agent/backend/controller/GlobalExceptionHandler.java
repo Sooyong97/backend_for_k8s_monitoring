@@ -9,6 +9,7 @@ import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.time.LocalDateTime;
 import java.util.HashMap;
@@ -44,6 +45,23 @@ public class GlobalExceptionHandler {
         sendErrorNotification("JSON 파싱 에러", "Invalid JSON format: " + e.getMessage(), "BAD_REQUEST");
         
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+
+    /**
+     * 정적 리소스를 찾을 수 없을 때 처리 (404)
+     * 루트 경로(/)나 존재하지 않는 정적 리소스 요청 시 발생
+     */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<Map<String, Object>> handleNoResourceFoundException(NoResourceFoundException e) {
+        // 정적 리소스 에러는 DEBUG 레벨로만 로깅 (너무 많은 로그 방지)
+        log.debug("정적 리소스를 찾을 수 없음: {}", e.getResourcePath());
+        
+        Map<String, Object> error = new HashMap<>();
+        error.put("status", "error");
+        error.put("message", "Resource not found");
+        error.put("path", e.getResourcePath());
+        
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
     }
 
     /**
